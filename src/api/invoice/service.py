@@ -3,8 +3,8 @@ import mimetypes
 import uuid
 
 import boto3
+from api.config.config import AWS_REGION, S3_BUCKET_NAME
 from botocore.exceptions import BotoCoreError, ClientError
-from config import AWS_REGION, S3_BUCKET_NAME
 from fastapi import HTTPException, UploadFile
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,10 @@ def upload_invoice_image(user_id: str, image: UploadFile) -> str:
     key = f"{user_id}/{uuid.uuid4()}{extension}"
     try:
         s3.upload_fileobj(
-            image.file, S3_BUCKET_NAME, key, ExtraArgs={"ContentType": image.content_type}
+            image.file,
+            S3_BUCKET_NAME,
+            key,
+            ExtraArgs={"ContentType": image.content_type},
         )
     except (BotoCoreError, ClientError) as e:
         logger.exception("Failed to upload %s to S3", key)

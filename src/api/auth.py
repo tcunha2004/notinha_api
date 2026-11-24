@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from config import GOOGLE_CLIENT_ID
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.auth.transport import requests
 from google.oauth2 import id_token
+
+from api.config.config import GOOGLE_CLIENT_ID
 
 bearer = HTTPBearer()
 
