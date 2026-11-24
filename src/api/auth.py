@@ -1,23 +1,32 @@
+import json
 from typing import Annotated
 
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from google.auth.transport import requests
-from google.oauth2 import id_token
+import redis
+from fastapi import Cookie, Depends, HTTPException
 
-from api.config.config import GOOGLE_CLIENT_ID
+from api.config.config import REDIS_URL
 
-bearer = HTTPBearer()
+SESSION_COOKIE = "session"
+SESSION_TTL = 604800  # 7 days, no sliding renewal
+
+_redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 
-def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
-) -> str:
-    """Validate the Google ID token and return its `sub` (the user's stable ID)."""
-    try:
-        claims = id_token.verify_oauth2_token(
-            credentials.credentials, requests.Request(), GOOGLE_CLIENT_ID
-        )
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return claims["sub"]
+def get_redis() -> redis.Redis:
+    return _redis
+
+
+def current_session(
+    session: Annotated[str | None, Cookie()] = None,
+    r: redis.Redis = Depends(get_redis),
+) -> dict:
+    """Resolve the session cookie through Redis; 401 when missing, expired or tampered."""
+    raw = r.get(f"session:{session}") if session else None
+    if raw is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return json.loads(raw)
+
+
+def get_current_user(session_data: Annotated[dict, Depends(current_session)]) -> str:
+    """Return the user's stable ID (Google `sub`)."""
+    return session_data["sub"]
