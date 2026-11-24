@@ -66,7 +66,9 @@ def login(
     if not claims.get("email_verified"):
         raise HTTPException(status_code=401, detail="Email not verified")
 
-    if session:  # a new login always gets a new session ID; don't leave the old one orphaned
+    if (
+        session
+    ):  # a new login always gets a new session ID; don't leave the old one orphaned
         r.delete(f"session:{session}")
     user = {
         "sub": claims["sub"],

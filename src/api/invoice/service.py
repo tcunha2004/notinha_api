@@ -3,19 +3,20 @@ import mimetypes
 import uuid
 
 import boto3
-from api.config.config import AWS_REGION, S3_BUCKET_NAME
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, UploadFile
+
+from api.config.config import AWS_REGION, S3_BUCKET_NAME
 
 logger = logging.getLogger(__name__)
 
 s3 = boto3.client("s3", region_name=AWS_REGION)
 
 
-def upload_invoice_image(user_id: str, image: UploadFile) -> str:
+def upload_invoice_image(user_id: str, image: UploadFile, uuid: uuid.UUID) -> str:
     """Upload the image to S3 at `{user_id}/{uuid}.ext` and return that key."""
     extension = mimetypes.guess_extension(image.content_type) or ""  # type: ignore
-    key = f"{user_id}/{uuid.uuid4()}{extension}"
+    key = f"{user_id}/{uuid}{extension}"
     try:
         s3.upload_fileobj(
             image.file,

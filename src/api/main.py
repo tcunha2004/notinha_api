@@ -1,4 +1,5 @@
 import redis
+import redis.exceptions
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -23,4 +24,4 @@ api.include_router(invoice_router)
 @api.exception_handler(redis.exceptions.TimeoutError)  # not a ConnectionError subclass
 async def redis_unavailable(request: Request, exc: redis.exceptions.RedisError):
     """One handler for every route that touches Redis."""
-    return JSONResponse({"detail": "Serviço indisponível"}, status_code=503)
+    return JSONResponse({"detail": "Unavailable service"}, status_code=503)

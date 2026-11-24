@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
@@ -17,9 +18,9 @@ def upload_invoice(
     if not (image.content_type or "").startswith("image/"):
         raise HTTPException(status_code=400, detail="The file must be an image")
     if image.size and image.size > MAX_IMAGE_SIZE:
-        raise HTTPException(
-            status_code=413, detail="The image must have 10 MB maximum"
-        )
+        raise HTTPException(status_code=413, detail="The image must have 10 MB maximum")
 
-    key = service.upload_invoice_image(user_id, image)
-    return {"key": key}
+    uuid = uuid4()
+    key = service.upload_invoice_image(user_id, image, uuid)
+
+    # send the image to the agent
