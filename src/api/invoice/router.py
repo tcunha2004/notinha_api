@@ -1,9 +1,9 @@
 from typing import Annotated
 
-from auth import get_current_user
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
-from invoice import service
+from api.auth import get_current_user
+from api.invoice import service
 
 router = APIRouter(prefix="/invoice", tags=["invoice"])
 
