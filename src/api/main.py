@@ -20,6 +20,7 @@ api.include_router(invoice_router)
 
 
 @api.exception_handler(redis.exceptions.ConnectionError)
-async def redis_unavailable(request: Request, exc: redis.exceptions.ConnectionError):
+@api.exception_handler(redis.exceptions.TimeoutError)  # not a ConnectionError subclass
+async def redis_unavailable(request: Request, exc: redis.exceptions.RedisError):
     """One handler for every route that touches Redis."""
     return JSONResponse({"detail": "Serviço indisponível"}, status_code=503)

@@ -1,4 +1,5 @@
 import fakeredis
+import redis
 
 from api.auth import get_redis
 from api.main import api
@@ -33,3 +34,16 @@ def test_redis_down_returns_503(client, google_claims):
 
     client.cookies.set("session", "abc")
     assert client.get("/auth/me").status_code == 503
+
+
+def test_redis_timeout_returns_503(client):
+    class HangingRedis:
+        def get(self, key):
+            raise redis.exceptions.TimeoutError("Timeout reading from socket")
+
+    api.dependency_overrides[get_redis] = lambda: HangingRedis()
+    client.cookies.set("session", "abc")
+
+    response = client.get("/auth/me")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Serviço indisponível"}
