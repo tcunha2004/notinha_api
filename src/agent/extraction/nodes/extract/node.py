@@ -11,7 +11,7 @@ from agent.extraction.state import GraphState, SaveStatus
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
 
-MAX_EXTRACTION_TRIES = 3
+MAX_EXTRACTION_TRIES = 2
 
 
 class UnreadableInvoice(Exception):

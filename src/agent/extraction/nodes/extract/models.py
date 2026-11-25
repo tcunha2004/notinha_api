@@ -37,7 +37,9 @@ class Store(BaseModel):
         default=None, min_length=1, description="The legal/corporate name of the store"
     )
     id: str | None = Field(
-        default=None, min_length=1, description="The ID of the store (e.g.: CNPJ)"
+        default=None,
+        min_length=1,
+        description="The ID of the store (CNPJ). MUST be in the format xx.xxx.xxx/xxxx-xx (e.g. 03.821.728/0001-72, 20.184.393/0001-70)",
     )
     address: str | None = Field(
         default=None, min_length=1, description="The address of the store"
