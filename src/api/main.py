@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from api.auth import router as auth_router
 from api.config.config import FRONTEND_ORIGIN
 from api.invoice.router import router as invoice_router
+from api.purchases import router as purchases_router
 
 api = FastAPI(title="Notinha API")
 api.add_middleware(
@@ -19,6 +20,7 @@ api.add_middleware(
 )
 api.include_router(auth_router)
 api.include_router(invoice_router)
+api.include_router(purchases_router)
 
 
 @api.exception_handler(redis.exceptions.ConnectionError)
