@@ -11,9 +11,16 @@ class MediaType(StrEnum):
     PNG = "image/png"
 
 
+class SaveStatus(StrEnum):
+    OK = "ok"
+    REVIEW = "needs_review"
+
+
 class GraphState(TypedDict):
     uuid: UUID
     user_id: str
     image: bytes
     media_type: MediaType
     data: NotRequired[ExtractionOutput]
+    extraction_tries: NotRequired[int]
+    save_status: NotRequired[SaveStatus]

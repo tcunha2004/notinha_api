@@ -1,26 +1,40 @@
 from typing import Annotated
 from uuid import uuid4
 
+from agent.extraction.graph import Graph
+from agent.extraction.nodes.extract.node import UnreadableInvoice
+from agent.extraction.state import MediaType
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
-from api.auth import get_current_user
-from api.invoice import service
+from api.auth import current_user_id
 
 router = APIRouter(prefix="/invoice", tags=["invoice"])
 
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 
+graph = Graph()
+
 
 @router.post("/upload_invoice")
 def upload_invoice(
-    image: UploadFile, user_id: Annotated[str, Depends(get_current_user)]
+    image: UploadFile, user_id: Annotated[str, Depends(current_user_id)]
 ):
-    if not (image.content_type or "").startswith("image/"):
+    if image.content_type not in set(MediaType):
         raise HTTPException(status_code=400, detail="The file must be an image")
     if image.size and image.size > MAX_IMAGE_SIZE:
         raise HTTPException(status_code=413, detail="The image must have 10 MB maximum")
 
     uuid = uuid4()
-    key = service.upload_invoice_image(user_id, image, uuid)
-
-    # send the image to the agent
+    try:
+        # The save node writes the image to S3 and the data to Postgres.
+        result = graph.compiler.invoke(
+            {
+                "uuid": uuid,
+                "user_id": user_id,
+                "image": image.file.read(),
+                "media_type": MediaType(image.content_type),
+            }
+        )
+    except UnreadableInvoice as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"id": uuid, "status": result["save_status"]}

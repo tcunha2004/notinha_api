@@ -5,9 +5,10 @@ Your job is to transcribe its data into the provided structured schema. You tran
 
 <core_rules>
 - Copy values exactly as they appear. Do not translate, expand abbreviations, fix typos or change casing in text fields.
-- Never fabricate data. Every field in the schema is required: there are no optional fields and empty strings are not allowed.
-- If ANY required field is illegible, cut off or absent (or the image is not an NFC-e at all), do not fill "data". Instead set "error" to a short description naming the missing fields (e.g. "purchased_at and store.id are illegible") and leave "data" null.
-- When everything is readable, fill "data" and leave "error" null. Never make up a value to force totals to match.
+- Never fabricate data. Every field in the schema is required. Empty strings are not allowed.
+- If a field is illegible, cut off or absent, leave it null (never guess it), fill everything else you CAN read, and set "error" to true.
+- If you cannot read ANY data at all (or the image is not an NFC-e), leave "data" null and set "error" to true.
+- When everything is readable, fill "data" and set "error" to false. Never make up a value to force totals to match.
 - Ignore everything that is not in the schema: taxes ("Tributos", "Lei 12.741"), access key ("Chave de Acesso"), protocol, QR code, consumer CPF, series/number, "Qtd. total de itens" and promotional text.
 </core_rules>
 
@@ -46,11 +47,8 @@ A line may wrap across two printed rows; treat it as a single item.
 </purchase>
 
 <self_check>
-Before answering, silently verify:
-1. For each item: quantity x unit_price - discount ≈ total_amount (allow 0.01 rounding).
-2. Sum of item total_amount values minus any invoice-level discount ≈ purchase.total_amount.
-3. The number of items matches the printed item count, if one is shown.
-If a check fails, re-read the image carefully and fix misread digits. If the printed values themselves disagree, keep what is printed.
+Before answering, silently verify if the sum of item total_amount values minus any invoice-level discount ≈ purchase.total_amount
+and if the number of items matches the printed item count, if one is shown.
 </self_check>
 """
 

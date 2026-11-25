@@ -1,29 +1,63 @@
-from langgraph.graph import END
+import pytest
 
-from agent.extraction.graph import (
-    MAX_ATTEMPTS,
-    InvoiceData,
-    Item,
-    find_errors,
-    route_after_validation,
+from agent.extraction import graph as graph_module
+from agent.extraction.graph import Graph
+from agent.extraction.nodes.extract import node as extract_node
+from agent.extraction.nodes.extract.models import (
+    ExtractionOutput,
+    ExtractionResponse,
+    Store,
 )
+from agent.extraction.state import MediaType, SaveStatus
+
+FULL = ExtractionOutput(store=Store(name="Mercado", id="1", address="Rua A"))
+PARTIAL = ExtractionOutput(store=Store(name="Mercado"))
 
 
-def make(**kw):
-    base = dict(merchant="Mercado", date="2026-11-24", total=10.0, items=[Item(name="a", price=10.0)])
-    return InvoiceData(**{**base, **kw})
+class FakeLLM:
+    """Returns the given responses in order, counting calls."""
+
+    def __init__(self, *responses):
+        self.responses, self.calls = list(responses), 0
+
+    def with_structured_output(self, _):
+        return self
+
+    def invoke(self, _):
+        self.calls += 1
+        return self.responses.pop(0)
 
 
-def test_valid_data_has_no_errors():
-    assert find_errors(make()) == []
+def run(monkeypatch, *responses):
+    llm = FakeLLM(*responses)
+    monkeypatch.setattr(extract_node, "LLM", llm)
+    monkeypatch.setattr(graph_module, "node_save", lambda state: {})  # no DB/S3 here
+    state = {"uuid": "x", "user_id": "u1", "image": b"img", "media_type": MediaType.JPG}
+    return Graph().compiler.invoke(state), llm
 
 
-def test_missing_fields_and_bad_sum_are_reported():
-    assert find_errors(make(merchant=None, date=None, total=None))
-    assert any("sum" in e for e in find_errors(make(total=99.0)))
+def test_no_data_raises(monkeypatch):
+    with pytest.raises(extract_node.UnreadableInvoice):
+        run(monkeypatch, ExtractionResponse(error=True, data=None))
 
 
-def test_route_save_retry_or_give_up():
-    assert route_after_validation({"errors": [], "attempts": 1}) == "save"
-    assert route_after_validation({"errors": ["x"], "attempts": 1}) == "extract"
-    assert route_after_validation({"errors": ["x"], "attempts": MAX_ATTEMPTS}) == END
+def test_full_data_saves_ok(monkeypatch):
+    result, llm = run(monkeypatch, ExtractionResponse(data=FULL))
+    assert (result["save_status"], result["data"], llm.calls) == (SaveStatus.OK, FULL, 1)
+
+
+def test_partial_then_full_retries(monkeypatch):
+    result, llm = run(
+        monkeypatch,
+        ExtractionResponse(error=True, data=PARTIAL),
+        ExtractionResponse(data=FULL),
+    )
+    assert (result["save_status"], result["data"], llm.calls) == (SaveStatus.OK, FULL, 2)
+
+
+def test_partial_until_limit_saves_review(monkeypatch):
+    responses = [ExtractionResponse(error=True, data=PARTIAL)] * extract_node.MAX_EXTRACTION_TRIES
+    result, llm = run(monkeypatch, *responses)
+    assert result["save_status"] == SaveStatus.REVIEW
+    assert result["data"] == PARTIAL
+    assert llm.calls == extract_node.MAX_EXTRACTION_TRIES

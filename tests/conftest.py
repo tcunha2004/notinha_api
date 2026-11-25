@@ -6,12 +6,28 @@ os.environ["GOOGLE_CLIENT_ID"] = "test-client-id"
 os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("S3_BUCKET_NAME", "test-bucket")
 
-import fakeredis  # noqa: E402
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
+import fakeredis
+import pytest
+from fastapi.testclient import TestClient
 
-from api.auth import get_redis  # noqa: E402
-from api.main import api  # noqa: E402
+from api.auth import get_redis
+from api.main import api
+
+
+@pytest.fixture(autouse=True)
+def users_db(monkeypatch):
+    """In-memory users table, so the API tests don't need Postgres.
+    The real SQL is covered in test_save_node.py."""
+    users: dict[str, dict] = {}
+
+    def upsert(claims):
+        user_id = f"user-{claims['sub']}"
+        users[user_id] = {k: claims.get(k, "") for k in ("email", "name", "picture")}
+        return user_id
+
+    monkeypatch.setattr("api.auth.upsert_user", upsert)
+    monkeypatch.setattr("api.auth.load_user", users.get)
+    return users
 
 
 @pytest.fixture

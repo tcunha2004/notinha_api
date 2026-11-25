@@ -9,7 +9,7 @@ result = graph.compiler.invoke(
     input={
         "uuid": uuid4(),
         "media_type": MediaType.JPG,
-        "user_id": "001",
+        "user_id": "<users.id>",  # an existing users.id: log in once and copy it from the DB
         "image": Path("~/Downloads/nf_convertida.jpg").expanduser().read_bytes(),
     }
 )

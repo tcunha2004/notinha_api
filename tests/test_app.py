@@ -1,4 +1,5 @@
 import fakeredis
+import psycopg
 import redis
 
 from api.auth import get_redis
@@ -30,7 +31,7 @@ def test_redis_down_returns_503(client, google_claims):
 
     response = client.post("/auth/google", json={"credential": "valid-token"})
     assert response.status_code == 503
-    assert response.json() == {"detail": "Serviço indisponível"}
+    assert response.json() == {"detail": "Unavailable service"}
 
     client.cookies.set("session", "abc")
     assert client.get("/auth/me").status_code == 503
@@ -46,4 +47,14 @@ def test_redis_timeout_returns_503(client):
 
     response = client.get("/auth/me")
     assert response.status_code == 503
-    assert response.json() == {"detail": "Serviço indisponível"}
+    assert response.json() == {"detail": "Unavailable service"}
+
+
+def test_postgres_down_returns_503(client, google_claims, monkeypatch):
+    def down(_claims):
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr("api.auth.upsert_user", down)
+    response = client.post("/auth/google", json={"credential": "valid-token"})
+    assert response.status_code == 503
+    assert "set-cookie" not in response.headers

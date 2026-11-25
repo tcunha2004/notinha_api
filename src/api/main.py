@@ -1,3 +1,4 @@
+import psycopg
 import redis
 import redis.exceptions
 from fastapi import FastAPI, Request
@@ -22,6 +23,7 @@ api.include_router(invoice_router)
 
 @api.exception_handler(redis.exceptions.ConnectionError)
 @api.exception_handler(redis.exceptions.TimeoutError)  # not a ConnectionError subclass
-async def redis_unavailable(request: Request, exc: redis.exceptions.RedisError):
-    """One handler for every route that touches Redis."""
+@api.exception_handler(psycopg.OperationalError)  # Postgres down or unreachable
+async def service_unavailable(request: Request, exc: Exception):
+    """One handler for every route that touches Redis or Postgres."""
     return JSONResponse({"detail": "Unavailable service"}, status_code=503)

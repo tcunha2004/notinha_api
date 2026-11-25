@@ -1,8 +1,3 @@
-import json
-
-SESSION = {"sub": "google-123", "email": "ana@example.com", "name": "Ana Souza", "picture": ""}
-
-
 def upload_text_file(client):
     return client.post(
         "/invoice/upload_invoice",
@@ -20,7 +15,7 @@ def test_unknown_session_is_401(client):
 
 
 def test_valid_session_passes_auth(client, redis_client):
-    redis_client.set("session:abc", json.dumps(SESSION))
+    redis_client.set("session:abc", "user-1")
     client.cookies.set("session", "abc")
     # 400 comes from the route's own image check, so auth already passed (and S3 is never hit).
     response = upload_text_file(client)
@@ -48,7 +43,7 @@ def test_login_creates_session_and_sets_httponly_cookie(client, redis_client, go
     assert "Path=/" in cookie
     assert "Secure" not in cookie
     sid = client.cookies["session"]
-    assert json.loads(redis_client.get(f"session:{sid}"))["sub"] == "google-123"
+    assert redis_client.get(f"session:{sid}") == "user-google-123"  # only users.id is stored
     assert 604790 < redis_client.ttl(f"session:{sid}") <= 604800
 
 
@@ -77,6 +72,23 @@ def test_me_returns_user(client, google_claims):
     response = client.get("/auth/me")
     assert response.status_code == 200
     assert response.json()["email"] == "ana@example.com"
+
+
+def test_login_creates_the_user(client, users_db, google_claims):
+    login(client)
+    assert users_db["user-google-123"]["picture"] == "https://example.com/ana.png"
+
+
+def test_me_reads_the_profile_from_the_db(client, users_db, google_claims):
+    login(client)
+    users_db["user-google-123"]["name"] = "Ana S."  # profile changed after login
+    assert client.get("/auth/me").json()["name"] == "Ana S."
+
+
+def test_me_is_401_when_the_user_no_longer_exists(client, users_db, google_claims):
+    login(client)
+    users_db.clear()
+    assert client.get("/auth/me").status_code == 401
 
 
 def test_me_without_session_is_401(client):
