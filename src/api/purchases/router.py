@@ -5,11 +5,11 @@ import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from psycopg.rows import dict_row
-from pydantic import BaseModel, Field
 
 from agent.extraction.nodes.save.node import s3
 from api.auth import current_user_id
 from api.config.config import DATABASE_URL, S3_BUCKET_NAME
+from api.purchases.schemas import ItemIn, PurchaseIn
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
 
@@ -76,27 +76,6 @@ def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:
     return purchases
 
 
-class ItemIn(BaseModel):
-    """What the user can correct. The line total is always recomputed from these."""
-
-    description: str = Field(min_length=1, max_length=200)
-    quantity: float = Field(gt=0, le=100_000)
-    unit: str = Field(min_length=1, max_length=10)
-    unit_price: float = Field(ge=0, le=1_000_000)
-    discount: float = Field(default=0, ge=0, le=1_000_000)
-
-    def values(self) -> tuple:
-        total = max(0.0, round(self.quantity * self.unit_price - self.discount, 2))
-        return (
-            self.description.strip(),
-            self.quantity,
-            self.unit,
-            self.unit_price,
-            self.discount,
-            total,
-        )
-
-
 def _get_one(user_id: str, purchase_id: UUID) -> dict:
     found = load_purchases(user_id, purchase_id)
     if not found:
@@ -129,11 +108,6 @@ def get_photo(purchase_id: UUID, user_id: User):
     )
     return RedirectResponse(url)
 
-
-class PurchaseIn(BaseModel):
-    """The receipt total ("Valor a pagar"), e.g. when it was cut off in the photo."""
-
-    total_amount: float = Field(ge=0, le=1_000_000)
 
 
 @router.patch("/{purchase_id}")

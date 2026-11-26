@@ -9,7 +9,7 @@ from test_save_node import (  # importing it also skips this file when Postgres 
 )
 
 from agent.extraction.nodes.save import node as save_node
-from api import purchases as purchases_api
+from api.purchases import router as purchases_api
 from api.auth import upsert_user  # bound before conftest's in-memory patch
 
 
