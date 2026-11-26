@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from agent.extraction.graph import Graph
 from agent.extraction.nodes.extract.node import UnreadableInvoice
+from agent.extraction.nodes.save.node import DuplicatePurchase
 from agent.extraction.state import MediaType
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
@@ -37,4 +38,9 @@ def upload_invoice(
         )
     except UnreadableInvoice as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except DuplicatePurchase as e:
+        # The frontend uses purchase_id to open the purchase that already exists.
+        raise HTTPException(
+            status_code=409, detail={"message": str(e), "purchase_id": str(e.purchase_id)}
+        ) from e
     return {"id": uuid, "status": result["save_status"]}

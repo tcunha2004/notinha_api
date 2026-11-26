@@ -9,6 +9,14 @@ from api.config.config import AWS_REGION, DATABASE_URL, S3_BUCKET_NAME
 s3 = boto3.client("s3", region_name=AWS_REGION)
 
 
+class DuplicatePurchase(Exception):
+    """The user already saved a purchase from this store at this exact date and time."""
+
+    def __init__(self, purchase_id: UUID):
+        super().__init__("This invoice was already saved")
+        self.purchase_id = purchase_id
+
+
 def s3_key(user_id: str, purchase_id: UUID, media_type: str) -> str:
     """Where the invoice image lives inside the bucket (S3_BUCKET_NAME in .env)."""
     extension = mimetypes.guess_extension(media_type) or ""
@@ -23,6 +31,20 @@ def node_save(state: GraphState) -> dict:
 
     # One transaction: commits at the end of the block, rolls back on any exception.
     with psycopg.connect(DATABASE_URL) as conn:
+        # Same store (CNPJ) + same date and time = the same receipt sent twice.
+        # Without CNPJ or date we can't tell, so it's saved normally.
+        # ponytail: check-then-insert, two simultaneous uploads can both pass;
+        # add a UNIQUE (user_id, store_id, purchased_at) index if that ever happens.
+        if store and store.id and purchase and purchase.purchased_at:
+            existing = conn.execute(
+                """SELECT p.id FROM purchases p JOIN stores s ON s.id = p.store_id
+                   WHERE p.user_id = %s AND s.cnpj = %s AND p.purchased_at = %s
+                   LIMIT 1""",
+                (state["user_id"], store.id, purchase.purchased_at),
+            ).fetchone()
+            if existing:
+                raise DuplicatePurchase(existing[0])
+
         store_id = None
         if store and store.id:  # no CNPJ = can't identify the store, leave it null
             row = conn.execute(

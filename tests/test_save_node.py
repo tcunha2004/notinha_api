@@ -76,11 +76,31 @@ def test_saves_purchase_items_and_image(monkeypatch):
     assert s3.keys == [key] == [f"{user_id}/{s['uuid']}.jpg"]
     assert row("SELECT count(*) FROM purchase_items WHERE purchase_id = %s", s["uuid"]) == (2,)
 
-    # Same store again: reused, not duplicated.
-    s2 = state(user_id, SaveStatus.REVIEW)
+    # Same store, another time: store reused, not duplicated.
+    later = DATA.model_copy(update={"purchase": DATA.purchase.model_copy(  # type: ignore[union-attr]
+        update={"purchased_at": datetime(2025, 3, 15, 18, 0)})})
+    s2 = {**state(user_id, SaveStatus.REVIEW), "data": later}
     save_node.node_save(s2)
     assert row("SELECT store_id, status FROM purchases WHERE id = %s", s2["uuid"]) == (
         store_id, "needs_review")
+
+
+def test_same_store_date_and_time_is_refused_before_any_insert(monkeypatch):
+    s3 = FakeS3()
+    monkeypatch.setattr(save_node, "s3", s3)
+    user_id = new_user()
+    first = state(user_id)
+    save_node.node_save(first)
+
+    again = state(user_id)
+    with pytest.raises(save_node.DuplicatePurchase) as e:
+        save_node.node_save(again)
+    assert e.value.purchase_id == first["uuid"]
+    assert row("SELECT count(*) FROM purchases WHERE id = %s", again["uuid"]) == (0,)
+    assert len(s3.keys) == 1  # the second photo never reached S3
+
+    # Another user with the same receipt is not a duplicate.
+    save_node.node_save(state(new_user()))
 
 
 def test_s3_failure_rolls_back_db(monkeypatch):

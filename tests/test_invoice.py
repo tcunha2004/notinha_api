@@ -2,7 +2,10 @@
 
 import pytest
 
+from uuid import uuid4
+
 from agent.extraction.nodes.extract.node import UnreadableInvoice
+from agent.extraction.nodes.save.node import DuplicatePurchase
 from agent.extraction.state import SaveStatus
 from api.invoice import router as invoice_router
 
@@ -44,3 +47,15 @@ def test_unreadable_image_is_422(upload):
         raise UnreadableInvoice("Could not extract any data from the invoice image")
 
     assert send(invoke).status_code == 422
+
+
+def test_duplicate_invoice_is_409_with_existing_purchase_id(upload):
+    send = upload
+    existing = uuid4()
+
+    def invoke(_state):
+        raise DuplicatePurchase(existing)
+
+    response = send(invoke)
+    assert response.status_code == 409
+    assert response.json()["detail"]["purchase_id"] == str(existing)
