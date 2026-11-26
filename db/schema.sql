@@ -34,6 +34,20 @@ CREATE TABLE purchases (
 CREATE INDEX ON purchases (user_id);
 CREATE INDEX ON purchases (store_id);
 
+-- Standardized product, the same across stores (interpreted by the LLM from raw_description).
+CREATE TABLE products (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         text NOT NULL,  -- casing of the first time it was saved
+    brand        text,
+    package_size numeric,  -- in package_unit; NULL for items sold by weight/volume
+    package_unit text CHECK (package_unit IN ('g', 'ml', 'un')),
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+-- Product identity. lower(): "Café" and "café" are the same product.
+-- NULLS NOT DISTINCT: two "Banana prata" with brand NULL are the same product, not two.
+CREATE UNIQUE INDEX products_identity_idx
+    ON products (lower(name), lower(brand), package_size, package_unit) NULLS NOT DISTINCT;
+
 CREATE TABLE purchase_items (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     purchase_id     uuid NOT NULL REFERENCES purchases (id) ON DELETE CASCADE,
@@ -45,6 +59,9 @@ CREATE TABLE purchase_items (
     unit            text,  -- UN, KG, L, ... (as printed)
     unit_price      numeric,
     discount        numeric NOT NULL DEFAULT 0,
-    total_amount    numeric
+    total_amount    numeric,
+    product_id      uuid REFERENCES products (id)  -- NULL when the product couldn't be identified
 );
 CREATE INDEX ON purchase_items (purchase_id);
+CREATE INDEX ON purchase_items (product_id);
+CREATE INDEX ON purchase_items (code);  -- store + code lookup in the save node

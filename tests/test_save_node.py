@@ -9,8 +9,10 @@ import pytest
 from agent.extraction.nodes.extract.models import (
     ExtractionOutput,
     Item,
+    Product,
     Purchase,
     Store,
+    format_cnpj,
 )
 from agent.extraction.nodes.save import node as save_node
 from agent.extraction.state import GraphState, MediaType, SaveStatus
@@ -24,8 +26,14 @@ except psycopg.OperationalError:
         "Postgres not running (docker compose up -d postgres)", allow_module_level=True
     )
 
+def random_cnpj() -> str:
+    """A fresh valid CNPJ per run: exactly one of the 100 possible check-digit suffixes passes."""
+    base = f"{uuid4().int % 10**12:012}"
+    return next(c for i in range(100) if format_cnpj(c := f"{base}{i:02}"))
+
+
 DATA = ExtractionOutput(
-    store=Store(name="Mercado", id=f"cnpj-{uuid4()}", address="Rua A"),
+    store=Store(name="Mercado", id=random_cnpj(), address="Rua A"),
     purchase=Purchase(
         total_amount=12.9,
         payment_method="PIX",
@@ -149,6 +157,57 @@ def test_same_store_date_and_time_is_refused_before_any_insert(monkeypatch):
 
     # Another user with the same receipt is not a duplicate.
     save_node.node_save(state(new_user()))
+
+
+def test_links_items_to_products(monkeypatch):
+    monkeypatch.setattr(save_node, "s3", FakeS3())
+    user_id = new_user()
+    name = f"Arroz {uuid4()}"  # unique per run: the products table outlives the tests
+    store_a, store_b = random_cnpj(), random_cnpj()
+
+    def save(cnpj, hour, product_name, code, brand="Tio João"):
+        s = state(user_id)
+        s["data"] = DATA.model_copy(
+            update={
+                "store": Store(name="Mercado", id=cnpj),
+                "purchase": Purchase(purchased_at=datetime(2025, 3, 15, hour)),
+                "items": [
+                    Item(
+                        raw_description="ARROZ TIO JOAO 5KG",
+                        code=code,
+                        product=Product(
+                            name=product_name,
+                            brand=brand,
+                            package_size=5000,
+                            package_unit="g",
+                        ),
+                    ),
+                    Item(raw_description="XPTO", code="999"),  # LLM couldn't interpret it
+                ],
+            }
+        )
+        save_node.node_save(s)
+        with psycopg.connect(DATABASE_URL) as conn:
+            return [
+                r[0]
+                for r in conn.execute(
+                    "SELECT product_id FROM purchase_items WHERE purchase_id = %s ORDER BY position",
+                    (s["uuid"],),
+                )
+            ]
+
+    product_id, no_product = save(store_a, 10, name, code="001")
+    assert product_id is not None and no_product is None
+
+    # Same store + code wins, even with a different name from the LLM.
+    assert save(store_a, 11, f"{name} branco", code="001") == [product_id, None]
+    # Another store, unknown code: found by name + brand + size + unit.
+    assert save(store_b, 12, name, code="777") == [product_id, None]
+    # Casing doesn't matter, and the first saved casing is kept.
+    assert save(store_b, 13, name.upper(), code="888", brand="TIO JOÃO") == [product_id, None]
+
+    assert row("SELECT count(*) FROM products WHERE name ILIKE %s", f"{name}%") == (1,)
+    assert row("SELECT name, brand FROM products WHERE id = %s", product_id) == (name, "Tio João")
 
 
 def test_s3_failure_rolls_back_db(monkeypatch):
