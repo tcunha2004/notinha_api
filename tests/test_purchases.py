@@ -57,15 +57,20 @@ def test_other_users_purchase_is_404(saved, redis_client):
         upsert_user({"sub": f"x-{uuid4()}", "email": "x", "name": "", "picture": ""}),
     )
     assert client.get(f"/purchases/{pid}").status_code == 404
-    item = {"description": "X", "quantity": 1, "unit": "UN", "unit_price": 1}
+    item = {"name": "X", "quantity": 1, "unit": "UN", "unit_price": 1}
     assert client.post(f"/purchases/{pid}/items", json=item).status_code == 404
 
 
 def test_editing_an_item_recomputes_total_and_status(saved):
     client, pid = saved
     banana = client.get(f"/purchases/{pid}").json()["items"][1]
+    # Only the numbers fixed (name still the receipt text): stays without a product.
+    numbers_only = {"name": "BANANA", "quantity": 0.5, "unit": "KG", "unit_price": 10}
+    body = client.patch(f"/purchases/{pid}/items/{banana['id']}", json=numbers_only).json()
+    assert body["items"][1]["product"] is None
+
     edit = {
-        "description": "Banana prata",
+        "name": "Banana prata",
         "quantity": 0.5,
         "unit": "KG",
         "unit_price": 10,
@@ -73,7 +78,7 @@ def test_editing_an_item_recomputes_total_and_status(saved):
     }
     body = client.patch(f"/purchases/{pid}/items/{banana['id']}", json=edit).json()
     item = body["items"][1]
-    assert (item["description"], item["total_amount"], item["flagged"]) == (
+    assert (item["product"]["name"], item["total_amount"], item["flagged"]) == (
         "Banana prata",
         5.0,
         False,
@@ -94,12 +99,12 @@ def test_editing_an_item_recomputes_total_and_status(saved):
 
 def test_adding_an_item_goes_last_and_rechecks(saved):
     client, pid = saved
-    new = {"description": "Sacola", "quantity": 1, "unit": "UN", "unit_price": 0.1}
+    new = {"name": "Sacola", "quantity": 1, "unit": "UN", "unit_price": 0.1}
     response = client.post(f"/purchases/{pid}/items", json=new)
     assert response.status_code == 201
     body = response.json()
     assert (
-        body["items"][-1]["description"] == "Sacola"
+        body["items"][-1]["product"]["name"] == "Sacola"
         and body["items"][-1]["raw_description"] is None
     )
     assert body["status"] == "needs_review"  # 13.00 ≠ 12.90
@@ -107,7 +112,7 @@ def test_adding_an_item_goes_last_and_rechecks(saved):
 
 def test_invalid_item_is_rejected(saved):
     client, pid = saved
-    bad = {"description": "", "quantity": -1, "unit": "UN", "unit_price": 1}
+    bad = {"name": "   ", "quantity": -1, "unit": "UN", "unit_price": 1}
     assert client.post(f"/purchases/{pid}/items", json=bad).status_code == 422
     assert client.get("/purchases/not-a-uuid").status_code == 422
 

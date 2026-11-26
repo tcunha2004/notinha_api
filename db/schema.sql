@@ -52,15 +52,14 @@ CREATE TABLE purchase_items (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     purchase_id     uuid NOT NULL REFERENCES purchases (id) ON DELETE CASCADE,
     position        bigserial,  -- insertion order = order printed on the receipt
-    raw_description text,       -- NULL for items the user added by hand
-    description     text,       -- the user's friendly name ("Pão francês")
+    raw_description text,       -- as printed; NULL for items the user added by hand
     code            text,
     quantity        numeric,
     unit            text,  -- UN, KG, L, ... (as printed)
     unit_price      numeric,
     discount        numeric NOT NULL DEFAULT 0,
     total_amount    numeric,
-    product_id      uuid REFERENCES products (id)  -- NULL when the product couldn't be identified
+    product_id      uuid REFERENCES products (id)  -- its name is the item's name; NULL = not identified
 );
 CREATE INDEX ON purchase_items (purchase_id);
 CREATE INDEX ON purchase_items (product_id);

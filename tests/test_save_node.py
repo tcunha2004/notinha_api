@@ -210,6 +210,36 @@ def test_links_items_to_products(monkeypatch):
     assert row("SELECT name, brand FROM products WHERE id = %s", product_id) == (name, "Tio João")
 
 
+def test_a_users_rename_follows_the_code_only_for_them(monkeypatch):
+    monkeypatch.setattr(save_node, "s3", FakeS3())
+    cnpj, name = random_cnpj(), f"Feijão {uuid4()}"
+
+    def save(user_id, hour):
+        s = state(user_id)
+        s["data"] = DATA.model_copy(
+            update={
+                "store": Store(name="Mercado", id=cnpj),
+                "purchase": Purchase(purchased_at=datetime(2025, 3, 15, hour)),
+                "items": [
+                    Item(raw_description="FEIJAO", code="001", product=Product(name=name))
+                ],
+            }
+        )
+        save_node.node_save(s)
+        return row("SELECT id, product_id FROM purchase_items WHERE purchase_id = %s", s["uuid"])
+
+    ana, bia = new_user(), new_user()
+    item_id, product_id = save(ana, 10)  # type: ignore[misc]
+
+    # Ana renames her item (what PATCH /items does): it now points to another product.
+    with psycopg.connect(DATABASE_URL) as conn:
+        renamed = save_node.upsert_product(conn, f"{name} da vovó", None, None, None)
+        conn.execute("UPDATE purchase_items SET product_id = %s WHERE id = %s", (renamed, item_id))
+
+    assert save(ana, 11)[1] == renamed  # type: ignore[index]  # her next receipt follows her rename
+    assert save(bia, 11)[1] == product_id  # type: ignore[index]  # Bia gets the LLM's product
+
+
 def test_s3_failure_rolls_back_db(monkeypatch):
     monkeypatch.setattr(save_node, "s3", FakeS3(fail=True))
     s = state(new_user())

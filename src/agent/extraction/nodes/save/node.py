@@ -25,26 +25,42 @@ def s3_key(user_id: str, purchase_id: UUID, media_type: str) -> str:
 
 
 def find_or_create_product(
-    conn: psycopg.Connection, store_id: UUID | None, item: Item
+    conn: psycopg.Connection, user_id: str, store_id: UUID | None, item: Item
 ) -> UUID | None:
     """The product of this item line, or None when it can't be identified."""
     # 1. Same store + same code: the store's own catalog code, so it's surely the same product
     #    (even if the LLM named it differently this time).
+    #    Only this user's purchases, latest first: renaming an item re-links it to another
+    #    product, and that choice must carry to their next receipts, not leak into other users'.
     if store_id and item.code:
         row = conn.execute(
             """SELECT pi.product_id FROM purchase_items pi
                JOIN purchases p ON p.id = pi.purchase_id
-               WHERE p.store_id = %s AND pi.code = %s AND pi.product_id IS NOT NULL
+               WHERE p.user_id = %s AND p.store_id = %s AND pi.code = %s
+                 AND pi.product_id IS NOT NULL
+               ORDER BY pi.position DESC
                LIMIT 1""",
-            (store_id, item.code),
+            (user_id, store_id, item.code),
         ).fetchone()
         if row:
             return row[0]
 
-    # 2. Same name + brand (ignoring case) + size + unit, in any store; or a new product.
+    # 2. Same name + brand + size + unit, in any store; or a new product.
     p = item.product
     if not (p and p.name):
         return None
+    return upsert_product(conn, p.name, p.brand, p.package_size, p.package_unit)
+
+
+def upsert_product(
+    conn: psycopg.Connection,
+    name: str,
+    brand: str | None,
+    package_size: float | None,
+    package_unit: str | None,
+) -> UUID:
+    """Id of the product with these values (name and brand ignoring case), created if new.
+    Never changes an existing product: it's shared by every user's items."""
     # The ON CONFLICT columns must match products_identity_idx (schema.sql) exactly.
     # DO UPDATE (a no-op that keeps the saved casing) instead of DO NOTHING,
     # so RETURNING also gives the id of an existing row.
@@ -53,7 +69,7 @@ def find_or_create_product(
            ON CONFLICT (lower(name), lower(brand), package_size, package_unit)
            DO UPDATE SET name = products.name
            RETURNING id""",
-        (p.name, p.brand, p.package_size, p.package_unit),
+        (name, brand, package_size, package_unit),
     ).fetchone()
     return row[0]  # type: ignore[index]
 
@@ -120,7 +136,7 @@ def node_save(state: GraphState) -> dict:
                     i.unit_price,
                     i.discount,
                     i.total_amount,
-                    find_or_create_product(conn, store_id, i),
+                    find_or_create_product(conn, state["user_id"], store_id, i),
                 ),
             )
 

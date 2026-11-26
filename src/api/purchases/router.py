@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from psycopg.rows import dict_row
 
-from agent.extraction.nodes.save.node import s3
+from agent.extraction.nodes.save.node import s3, upsert_product
 from api.auth import current_user_id
 from api.config.config import DATABASE_URL, S3_BUCKET_NAME
 from api.purchases.schemas import ItemIn, PurchaseIn
@@ -23,11 +23,14 @@ _FLAGGED = """(i.quantity IS NULL OR i.unit_price IS NULL OR i.total_amount IS N
 
 # Numbers come back as float8 so they reach the frontend as JSON numbers, not strings.
 _ITEMS_SQL = f"""
-    SELECT i.id, i.purchase_id, i.position, i.raw_description, i.description, i.code,
+    SELECT i.id, i.purchase_id, i.position, i.raw_description, i.code,
            COALESCE(i.quantity, 0)::float8 AS quantity, COALESCE(i.unit, 'UN') AS unit,
            COALESCE(i.unit_price, 0)::float8 AS unit_price, i.discount::float8 AS discount,
-           COALESCE(i.total_amount, 0)::float8 AS total_amount, {_FLAGGED} AS flagged
+           COALESCE(i.total_amount, 0)::float8 AS total_amount, {_FLAGGED} AS flagged,
+           pr.id AS product_id, pr.name AS product_name, pr.brand AS product_brand,
+           pr.package_size::float8 AS product_package_size, pr.package_unit AS product_package_unit
     FROM purchase_items i JOIN purchases p ON p.id = i.purchase_id
+    LEFT JOIN products pr ON pr.id = i.product_id
     WHERE p.user_id = %s AND (%s::uuid IS NULL OR p.id = %s)
     ORDER BY i.position"""
 
@@ -52,6 +55,9 @@ _REFRESH_STATUS_SQL = """
     WHERE p.id = %s"""
 
 
+_PRODUCT_FIELDS = ("id", "name", "brand", "package_size", "package_unit")
+
+
 def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:
     """The user's purchases (newest first) with store and items, shaped like the frontend's Purchase."""
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:  # type: ignore
@@ -61,6 +67,8 @@ def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:
 
     by_purchase: dict[UUID, list[dict]] = {}
     for item in items:
+        product = {k: item.pop(f"product_{k}") for k in _PRODUCT_FIELDS}  # type: ignore
+        item["product"] = product if product["id"] else None  # type: ignore
         by_purchase.setdefault(item["purchase_id"], []).append(item)  # type: ignore
 
     purchases = []
@@ -126,33 +134,45 @@ def update_purchase(purchase_id: UUID, body: PurchaseIn, user_id: User):
 
 @router.patch("/{purchase_id}/items/{item_id}")
 def update_item(purchase_id: UUID, item_id: UUID, body: ItemIn, user_id: User):
-    """Saves the correction and re-checks the purchase total. Returns the updated purchase."""
+    """Saves the correction and re-checks the purchase total. Returns the updated purchase.
+    The name links the item to the product with that name, keeping the brand and size it had."""
     with psycopg.connect(DATABASE_URL) as conn:
-        updated = conn.execute(
-            """UPDATE purchase_items i
-               SET description = %s, quantity = %s, unit = %s, unit_price = %s,
-                   discount = %s, total_amount = %s
-               FROM purchases p
-               WHERE i.id = %s AND i.purchase_id = p.id AND p.id = %s AND p.user_id = %s""",
-            (*body.values(), item_id, purchase_id, user_id),
-        ).rowcount
-        if not updated:
+        current = conn.execute(
+            """SELECT i.raw_description, i.product_id, pr.brand, pr.package_size, pr.package_unit
+               FROM purchase_items i JOIN purchases p ON p.id = i.purchase_id
+               LEFT JOIN products pr ON pr.id = i.product_id
+               WHERE i.id = %s AND p.id = %s AND p.user_id = %s""",
+            (item_id, purchase_id, user_id),
+        ).fetchone()
+        if current is None:
             raise HTTPException(status_code=404, detail="Item not found")
+        raw_description, product_id, *brand_and_size = current
+        # The form always sends a name. An unidentified item whose name is still the
+        # receipt text (only numbers were fixed) stays without a product.
+        if product_id or body.name != raw_description:
+            product_id = upsert_product(conn, body.name, *brand_and_size)
+        conn.execute(
+            """UPDATE purchase_items
+               SET product_id = %s, quantity = %s, unit = %s, unit_price = %s,
+                   discount = %s, total_amount = %s
+               WHERE id = %s""",
+            (product_id, *body.values(), item_id),
+        )
         conn.execute(_REFRESH_STATUS_SQL, (purchase_id,))
     return _get_one(user_id, purchase_id)
 
 
 @router.post("/{purchase_id}/items", status_code=201)
 def add_item(purchase_id: UUID, body: ItemIn, user_id: User):
-    """For a line the reading missed. Returns the updated purchase."""
+    """For a line the reading missed (no raw_description). Returns the updated purchase."""
     with psycopg.connect(DATABASE_URL) as conn:
         inserted = conn.execute(
             """INSERT INTO purchase_items
-                   (purchase_id, description, quantity, unit, unit_price, discount, total_amount)
+                   (purchase_id, product_id, quantity, unit, unit_price, discount, total_amount)
                SELECT id, %s, %s, %s, %s, %s, %s FROM purchases WHERE id = %s AND user_id = %s""",
-            (*body.values(), purchase_id, user_id),
+            (upsert_product(conn, body.name, None, None, None), *body.values(), purchase_id, user_id),
         ).rowcount
-        if not inserted:
+        if not inserted:  # the 404 rolls back the product created above
             raise HTTPException(status_code=404, detail="Purchase not found")
         conn.execute(_REFRESH_STATUS_SQL, (purchase_id,))
     return _get_one(user_id, purchase_id)
