@@ -24,3 +24,4 @@ class GraphState(TypedDict):
     data: NotRequired[ExtractionOutput]
     extraction_tries: NotRequired[int]
     save_status: NotRequired[SaveStatus]
+    store_logo: NotRequired[str]

@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 
 from agent.extraction import graph as graph_module
@@ -8,7 +10,7 @@ from agent.extraction.nodes.extract.models import (
     ExtractionResponse,
     Store,
 )
-from agent.extraction.state import MediaType, SaveStatus
+from agent.extraction.state import GraphState, MediaType, SaveStatus
 
 FULL = ExtractionOutput(store=Store(name="Mercado", id="1", address="Rua A"))
 PARTIAL = ExtractionOutput(store=Store(name="Mercado"))
@@ -32,7 +34,15 @@ def run(monkeypatch, *responses):
     llm = FakeLLM(*responses)
     monkeypatch.setattr(extract_node, "LLM", llm)
     monkeypatch.setattr(graph_module, "node_save", lambda state: {})  # no DB/S3 here
-    state = {"uuid": "x", "user_id": "u1", "image": b"img", "media_type": MediaType.JPG}
+    monkeypatch.setattr(
+        graph_module, "node_store_logo", lambda state: {}
+    )  # no web here
+    state: GraphState = {
+        "uuid": uuid4(),
+        "user_id": "u1",
+        "image": b"img",
+        "media_type": MediaType.JPG,
+    }
     return Graph().compiler.invoke(state), llm
 
 
@@ -43,7 +53,11 @@ def test_no_data_raises(monkeypatch):
 
 def test_full_data_saves_ok(monkeypatch):
     result, llm = run(monkeypatch, ExtractionResponse(data=FULL))
-    assert (result["save_status"], result["data"], llm.calls) == (SaveStatus.OK, FULL, 1)
+    assert (result["save_status"], result["data"], llm.calls) == (
+        SaveStatus.OK,
+        FULL,
+        1,
+    )
 
 
 def test_partial_then_full_retries(monkeypatch):
@@ -52,11 +66,17 @@ def test_partial_then_full_retries(monkeypatch):
         ExtractionResponse(error=True, data=PARTIAL),
         ExtractionResponse(data=FULL),
     )
-    assert (result["save_status"], result["data"], llm.calls) == (SaveStatus.OK, FULL, 2)
+    assert (result["save_status"], result["data"], llm.calls) == (
+        SaveStatus.OK,
+        FULL,
+        2,
+    )
 
 
 def test_partial_until_limit_saves_review(monkeypatch):
-    responses = [ExtractionResponse(error=True, data=PARTIAL)] * extract_node.MAX_EXTRACTION_TRIES
+    responses = [
+        ExtractionResponse(error=True, data=PARTIAL)
+    ] * extract_node.MAX_EXTRACTION_TRIES
     result, llm = run(monkeypatch, *responses)
     assert result["save_status"] == SaveStatus.REVIEW
     assert result["data"] == PARTIAL

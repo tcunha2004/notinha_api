@@ -27,7 +27,9 @@ def login(client):
     return client.post("/auth/google", json={"credential": "valid-token"})
 
 
-def test_login_creates_session_and_sets_httponly_cookie(client, redis_client, google_claims):
+def test_login_creates_session_and_sets_httponly_cookie(
+    client, redis_client, google_claims
+):
     response = login(client)
     assert response.status_code == 200
     assert response.json() == {
@@ -43,7 +45,9 @@ def test_login_creates_session_and_sets_httponly_cookie(client, redis_client, go
     assert "Path=/" in cookie
     assert "Secure" not in cookie
     sid = client.cookies["session"]
-    assert redis_client.get(f"session:{sid}") == "user-google-123"  # only users.id is stored
+    assert (
+        redis_client.get(f"session:{sid}") == "user-google-123"
+    )  # only users.id is stored
     assert 604790 < redis_client.ttl(f"session:{sid}") <= 604800
 
 

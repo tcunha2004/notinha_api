@@ -1,5 +1,6 @@
 import secrets
-from typing import Annotated
+from collections.abc import Mapping
+from typing import Annotated, Any
 
 import psycopg
 import redis
@@ -21,7 +22,7 @@ def get_redis() -> redis.Redis:
     return _redis
 
 
-def upsert_user(claims: dict) -> str:
+def upsert_user(claims: Mapping[str, Any]) -> str:
     """Create the user on the first login, refresh their Google profile on the next ones.
     Returns our own users.id, which is what the session and every other table use."""
     with psycopg.connect(DATABASE_URL) as conn:
@@ -30,21 +31,29 @@ def upsert_user(claims: dict) -> str:
                ON CONFLICT (google_sub) DO UPDATE SET
                    email = EXCLUDED.email, name = EXCLUDED.name, picture = EXCLUDED.picture
                RETURNING id""",
-            (claims["sub"], claims["email"], claims.get("name", ""), claims.get("picture", "")),
+            (
+                claims["sub"],
+                claims["email"],
+                claims.get("name", ""),
+                claims.get("picture", ""),
+            ),
         ).fetchone()
     return str(row[0])  # type: ignore[index]
 
 
 def load_user(user_id: str) -> dict | None:
-    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
-        return conn.execute(
+    with (
+        psycopg.connect(DATABASE_URL) as conn,
+        conn.cursor(row_factory=dict_row) as cur,
+    ):
+        return cur.execute(
             "SELECT email, name, picture FROM users WHERE id = %s", (user_id,)
         ).fetchone()
 
 
 def current_user_id(
+    r: Annotated[redis.Redis, Depends(get_redis)],
     session: Annotated[str | None, Cookie()] = None,
-    r: redis.Redis = Depends(get_redis),
 ) -> str:
     """Resolve the session cookie to users.id through Redis; 401 when missing, expired or tampered."""
     user_id = r.get(f"session:{session}") if session else None
@@ -70,8 +79,8 @@ class UserOut(BaseModel):
 def login(
     body: GoogleLogin,
     response: Response,
+    r: Annotated[redis.Redis, Depends(get_redis)],
     session: Annotated[str | None, Cookie()] = None,
-    r: redis.Redis = Depends(get_redis),
 ):
     """Exchange a Google ID token for our own session cookie."""
     try:
@@ -85,7 +94,9 @@ def login(
 
     user_id = upsert_user(claims)
 
-    if session:  # a new login always gets a new session ID; don't leave the old one orphaned
+    if (
+        session
+    ):  # a new login always gets a new session ID; don't leave the old one orphaned
         r.delete(f"session:{session}")
     sid = secrets.token_urlsafe(32)
     r.set(f"session:{sid}", user_id, ex=SESSION_TTL)
@@ -115,8 +126,8 @@ def me(user_id: Annotated[str, Depends(current_user_id)]):
 
 @router.post("/logout", status_code=204)
 def logout(
+    r: Annotated[redis.Redis, Depends(get_redis)],
     session: Annotated[str | None, Cookie()] = None,
-    r: redis.Redis = Depends(get_redis),
 ):
     if session:
         r.delete(f"session:{session}")

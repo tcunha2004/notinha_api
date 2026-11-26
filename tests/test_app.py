@@ -40,7 +40,7 @@ def test_redis_down_returns_503(client, google_claims):
 def test_redis_timeout_returns_503(client):
     class HangingRedis:
         def get(self, key):
-            raise redis.exceptions.TimeoutError("Timeout reading from socket")
+            raise redis.TimeoutError("Timeout reading from socket")
 
     api.dependency_overrides[get_redis] = lambda: HangingRedis()
     client.cookies.set("session", "abc")

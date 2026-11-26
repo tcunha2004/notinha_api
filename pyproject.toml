@@ -12,6 +12,7 @@ dependencies = [
     "dotenv>=0.9.9",
     "fastapi[standard]>=0.165.0",
     "google-auth[requests]>=2.63.1",
+    "httpx>=0.28.1",
     "langchain>=1.5.2",
     "langchain-aws>=1.10.0",
     "langgraph>=1.2.24",

@@ -1,8 +1,8 @@
 """What the upload endpoint answers for each graph outcome (the frontend depends on these codes)."""
 
-import pytest
-
 from uuid import uuid4
+
+import pytest
 
 from agent.extraction.nodes.extract.node import UnreadableInvoice
 from agent.extraction.nodes.save.node import DuplicatePurchase

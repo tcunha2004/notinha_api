@@ -1,6 +1,9 @@
 import base64
 from typing import Literal
 
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.types import Command
+
 from agent.extraction.config import LLM
 from agent.extraction.nodes.extract.models import ExtractionResponse
 from agent.extraction.nodes.extract.prompts import (
@@ -8,8 +11,6 @@ from agent.extraction.nodes.extract.prompts import (
     extract_user_prompt,
 )
 from agent.extraction.state import GraphState, SaveStatus
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.types import Command
 
 MAX_EXTRACTION_TRIES = 2
 
@@ -18,7 +19,7 @@ class UnreadableInvoice(Exception):
     """Nothing at all could be read from the image (illegible, or not an NFC-e)."""
 
 
-def node_extract_data(state: GraphState) -> Command[Literal["extract", "save"]]:
+def node_extract_data(state: GraphState) -> Command[Literal["extract", "store_logo"]]:
     response: ExtractionResponse = LLM.with_structured_output(  # type: ignore
         ExtractionResponse
     ).invoke(
@@ -49,10 +50,10 @@ def node_extract_data(state: GraphState) -> Command[Literal["extract", "save"]]:
                     "extraction_tries": tries,
                     "save_status": SaveStatus.REVIEW,
                 },
-                goto="save",
+                goto="store_logo",
             )
         return Command(update={"extraction_tries": tries}, goto="extract")
 
     return Command(
-        update={"data": response.data, "save_status": SaveStatus.OK}, goto="save"  # type: ignore
+        update={"data": response.data, "save_status": SaveStatus.OK}, goto="store_logo"  # type: ignore
     )

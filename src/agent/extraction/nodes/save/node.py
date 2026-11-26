@@ -3,6 +3,7 @@ from uuid import UUID
 
 import boto3
 import psycopg
+
 from agent.extraction.state import GraphState
 from api.config.config import AWS_REGION, DATABASE_URL, S3_BUCKET_NAME
 
@@ -31,10 +32,7 @@ def node_save(state: GraphState) -> dict:
 
     # One transaction: commits at the end of the block, rolls back on any exception.
     with psycopg.connect(DATABASE_URL) as conn:
-        # Same store (CNPJ) + same date and time = the same receipt sent twice.
-        # Without CNPJ or date we can't tell, so it's saved normally.
-        # ponytail: check-then-insert, two simultaneous uploads can both pass;
-        # add a UNIQUE (user_id, store_id, purchased_at) index if that ever happens.
+        # Duplicate error if the same receipt
         if store and store.id and purchase and purchase.purchased_at:
             existing = conn.execute(
                 """SELECT p.id FROM purchases p JOIN stores s ON s.id = p.store_id
@@ -48,12 +46,13 @@ def node_save(state: GraphState) -> dict:
         store_id = None
         if store and store.id:  # no CNPJ = can't identify the store, leave it null
             row = conn.execute(
-                """INSERT INTO stores (cnpj, name, address) VALUES (%s, %s, %s)
+                """INSERT INTO stores (cnpj, name, address, logo) VALUES (%s, %s, %s, %s)
                    ON CONFLICT (cnpj) DO UPDATE SET
                        name = COALESCE(EXCLUDED.name, stores.name),
-                       address = COALESCE(EXCLUDED.address, stores.address)
+                       address = COALESCE(EXCLUDED.address, stores.address),
+                       logo = COALESCE(EXCLUDED.logo, stores.logo)
                    RETURNING id""",
-                (store.id, store.name, store.address),
+                (store.id, store.name, store.address, state.get("store_logo")),
             ).fetchone()
             store_id = row[0]  # type: ignore[index]
 

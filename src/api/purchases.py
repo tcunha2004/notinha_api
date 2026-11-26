@@ -2,12 +2,12 @@ from typing import Annotated
 from uuid import UUID
 
 import psycopg
-from agent.extraction.nodes.save.node import s3
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
+from agent.extraction.nodes.save.node import s3
 from api.auth import current_user_id
 from api.config.config import DATABASE_URL, S3_BUCKET_NAME
 
@@ -36,7 +36,7 @@ _PURCHASES_SQL = """
     SELECT p.id, p.status, p.payment_method,
            COALESCE(p.purchased_at, p.created_at AT TIME ZONE 'America/Sao_Paulo') AS purchased_at,
            COALESCE(p.total_amount, 0)::float8 AS total_amount,
-           s.cnpj, s.name AS store_name, s.address
+           s.cnpj, s.name AS store_name, s.address, s.logo
     FROM purchases p LEFT JOIN stores s ON s.id = p.store_id
     WHERE p.user_id = %s AND (%s::uuid IS NULL OR p.id = %s)
     ORDER BY purchased_at DESC"""
@@ -65,9 +65,11 @@ def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:
 
     purchases = []
     for row in rows:
-        cnpj, name, address = row.pop("cnpj"), row.pop("store_name"), row.pop("address")  # type: ignore
+        cnpj, name, address, logo = (row.pop(k) for k in ("cnpj", "store_name", "address", "logo"))  # type: ignore
         row["store"] = (  # type: ignore
-            {"cnpj": cnpj, "name": name, "address": address} if cnpj else None
+            {"cnpj": cnpj, "name": name, "address": address, "logo": logo}
+            if cnpj
+            else None
         )
         row["items"] = by_purchase.get(row["id"], [])  # type: ignore
         purchases.append(row)

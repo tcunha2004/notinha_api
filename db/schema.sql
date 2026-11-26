@@ -15,6 +15,7 @@ CREATE TABLE stores (
     cnpj       text NOT NULL UNIQUE,
     name       text,
     address    text,
+    logo       text,  -- image URL found on the web (store_logo node); NULL = not found
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
