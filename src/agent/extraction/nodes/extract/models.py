@@ -77,13 +77,24 @@ class ExtractionOutput(BaseModel):
 
 
 class ExtractionResponse(BaseModel):
-    """The invoice data (full or partial) and whether something required is missing"""
+    """Decide first if the receipt is in scope (invalid). If it is, return the invoice data (full or partial) and whether something required is missing"""
 
-    error: bool = Field(
+    invalid: bool = Field(
         default=False,
-        description="True when ANY required field is illegible or missing. False otherwise",
+        description=(
+            "True when the image is NOT a supermarket/grocery or pharmacy receipt "
+            "(e.g. gas station fuel, restaurant/bar/delivery meal, services, parking, or not a receipt at all). "
+            "When True, return ONLY this field: missing=false and data=null. False otherwise"
+        ),
+    )
+    missing: bool = Field(
+        default=False,
+        description="True when ANY field is illegible, cut off or absent. False otherwise",
     )
     data: ExtractionOutput | None = Field(
         default=None,
-        description="The extracted invoice data, even if partial. Null ONLY if NO DATA at all could be extracted",
+        description=(
+            "The extracted invoice data, even if partial. "
+            "Null when invalid=true or when NO data at all could be read"
+        ),
     )

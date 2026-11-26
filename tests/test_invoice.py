@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from agent.extraction.nodes.extract.node import UnreadableInvoice
+from agent.extraction.nodes.extract.node import InvalidInvoice, UnreadableInvoice
 from agent.extraction.nodes.save.node import DuplicatePurchase
 from agent.extraction.state import SaveStatus
 from api.invoice import router as invoice_router
@@ -46,7 +46,20 @@ def test_unreadable_image_is_422(upload):
     def invoke(_state):
         raise UnreadableInvoice("Could not extract any data from the invoice image")
 
-    assert send(invoke).status_code == 422
+    response = send(invoke)
+    assert response.status_code == 422
+    assert response.json()["detail"]["reason"] == "unreadable"
+
+
+def test_not_a_grocery_receipt_is_422_invalid(upload):
+    send = upload
+
+    def invoke(_state):
+        raise InvalidInvoice("The image is not a supermarket or pharmacy receipt")
+
+    response = send(invoke)
+    assert response.status_code == 422
+    assert response.json()["detail"]["reason"] == "invalid"
 
 
 def test_duplicate_invoice_is_409_with_existing_purchase_id(upload):

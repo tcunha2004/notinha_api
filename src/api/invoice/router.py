@@ -4,7 +4,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from agent.extraction.graph import Graph
-from agent.extraction.nodes.extract.node import UnreadableInvoice
+from agent.extraction.nodes.extract.node import InvalidInvoice, UnreadableInvoice
 from agent.extraction.nodes.save.node import DuplicatePurchase
 from agent.extraction.state import MediaType
 from api.auth import current_user_id
@@ -36,8 +36,15 @@ def upload_invoice(
                 "media_type": MediaType(image.content_type),
             }
         )
+    # Both are 422 (nothing saved); `reason` tells the frontend which message to show.
     except UnreadableInvoice as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(
+            status_code=422, detail={"message": str(e), "reason": "unreadable"}
+        ) from e
+    except InvalidInvoice as e:
+        raise HTTPException(
+            status_code=422, detail={"message": str(e), "reason": "invalid"}
+        ) from e
     except DuplicatePurchase as e:
         # The frontend uses purchase_id to open the purchase that already exists.
         raise HTTPException(

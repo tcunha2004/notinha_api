@@ -48,7 +48,13 @@ def run(monkeypatch, *responses):
 
 def test_no_data_raises(monkeypatch):
     with pytest.raises(extract_node.UnreadableInvoice):
-        run(monkeypatch, ExtractionResponse(error=True, data=None))
+        run(monkeypatch, ExtractionResponse(missing=True, data=None))
+
+
+def test_invalid_receipt_raises_without_retry(monkeypatch):
+    # Only one response: a retry would pop an empty list (IndexError), not InvalidInvoice.
+    with pytest.raises(extract_node.InvalidInvoice):
+        run(monkeypatch, ExtractionResponse(invalid=True))
 
 
 def test_full_data_saves_ok(monkeypatch):
@@ -63,7 +69,7 @@ def test_full_data_saves_ok(monkeypatch):
 def test_partial_then_full_retries(monkeypatch):
     result, llm = run(
         monkeypatch,
-        ExtractionResponse(error=True, data=PARTIAL),
+        ExtractionResponse(missing=True, data=PARTIAL),
         ExtractionResponse(data=FULL),
     )
     assert (result["save_status"], result["data"], llm.calls) == (
@@ -75,7 +81,7 @@ def test_partial_then_full_retries(monkeypatch):
 
 def test_partial_until_limit_saves_review(monkeypatch):
     responses = [
-        ExtractionResponse(error=True, data=PARTIAL)
+        ExtractionResponse(missing=True, data=PARTIAL)
     ] * extract_node.MAX_EXTRACTION_TRIES
     result, llm = run(monkeypatch, *responses)
     assert result["save_status"] == SaveStatus.REVIEW
