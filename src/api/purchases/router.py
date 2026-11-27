@@ -36,10 +36,12 @@ _ITEMS_SQL = f"""
            COALESCE(i.unit_price, 0)::float8 AS unit_price, i.discount::float8 AS discount,
            COALESCE(i.total_amount, 0)::float8 AS total_amount, {_FLAGGED} AS flagged,
            prev.unit_price::float8 AS previous_unit_price,
-           pr.id AS product_id, pr.name AS product_name, pr.brand AS product_brand,
+           pr.id AS product_id, pr.name AS product_name,
+           b.name AS product_brand, b.logo AS product_brand_logo,
            pr.package_size::float8 AS product_package_size, pr.package_unit AS product_package_unit
     FROM purchase_items i JOIN purchases p ON p.id = i.purchase_id
     LEFT JOIN products pr ON pr.id = i.product_id
+    LEFT JOIN brands b ON b.id = pr.brand_id
     LEFT JOIN LATERAL (
         SELECT pi.unit_price
         FROM purchase_items pi JOIN purchases pp ON pp.id = pi.purchase_id
@@ -73,7 +75,7 @@ _REFRESH_STATUS_SQL = """
     WHERE p.id = %s"""
 
 
-_PRODUCT_FIELDS = ("id", "name", "brand", "package_size", "package_unit")
+_PRODUCT_FIELDS = ("id", "name", "brand", "brand_logo", "package_size", "package_unit")
 
 
 def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:

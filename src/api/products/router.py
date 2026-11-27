@@ -15,6 +15,8 @@ def list_products(user_id: User):
     # ponytail: whole catalog per call; add `?q=` + LIMIT when it reaches tens of thousands.
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:  # type: ignore
         return conn.execute(
-            """SELECT id, name, brand, package_size::float8 AS package_size, package_unit
-               FROM products ORDER BY lower(name), lower(brand) NULLS FIRST, package_size"""
+            """SELECT p.id, p.name, b.name AS brand, b.logo AS brand_logo,
+                      p.package_size::float8 AS package_size, p.package_unit
+               FROM products p LEFT JOIN brands b ON b.id = p.brand_id
+               ORDER BY lower(p.name), lower(b.name) NULLS FIRST, p.package_size"""
         ).fetchall()

@@ -191,3 +191,21 @@ def test_items_carry_the_previous_purchase_unit_price(saved, redis_client):
     # Sold by another unit: kg and un prices don't compare.
     lines = client.post(f"/purchases/{second}/items", json={**linked, "unit": "KG"}).json()["items"]
     assert lines[-1]["previous_unit_price"] is None
+
+
+def test_product_brand_and_logo_come_from_brands(saved):
+    client, pid = saved
+    banana = client.get(f"/purchases/{pid}").json()["items"][1]
+    brand = f"Sítio {uuid4()}"
+    new = {"name": f"Banana {uuid4()}", "brand": brand, "package_size": 1000, "package_unit": "g"}
+    edit = {"new_product": new, "quantity": 0.5, "unit": "KG", "unit_price": 10}
+    client.patch(f"/purchases/{pid}/items/{banana['id']}", json=edit)
+    with psycopg.connect(DATABASE_URL) as conn:
+        conn.execute("UPDATE brands SET logo = 'https://x.com/sitio.png' WHERE name = %s", (brand,))
+
+    product = client.get(f"/purchases/{pid}").json()["items"][1]["product"]
+    assert (product["brand"], product["brand_logo"]) == (brand, "https://x.com/sitio.png")
+    listed = next(p for p in client.get("/products").json() if p["id"] == product["id"])
+    assert (listed["brand"], listed["brand_logo"]) == (brand, "https://x.com/sitio.png")
+    # Item without a product: still null, no crash on the join.
+    assert client.get(f"/purchases/{pid}").json()["items"][0]["product"] is None

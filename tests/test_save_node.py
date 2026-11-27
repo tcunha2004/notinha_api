@@ -15,6 +15,7 @@ from agent.extraction.nodes.extract.models import (
     format_cnpj,
 )
 from agent.extraction.nodes.save import node as save_node
+from agent.extraction.nodes.save.node import brand_key, upsert_brand, upsert_product
 from agent.extraction.state import GraphState, MediaType, SaveStatus
 from api.auth import load_user, upsert_user  # bound before conftest's in-memory patch
 from api.config.config import DATABASE_URL
@@ -207,7 +208,10 @@ def test_links_items_to_products(monkeypatch):
     assert save(store_b, 13, name.upper(), code="888", brand="TIO JOÃO") == [product_id, None]
 
     assert row("SELECT count(*) FROM products WHERE name ILIKE %s", f"{name}%") == (1,)
-    assert row("SELECT name, brand FROM products WHERE id = %s", product_id) == (name, "Tio João")
+    assert row(
+        "SELECT p.name, b.name FROM products p JOIN brands b ON b.id = p.brand_id WHERE p.id = %s",
+        product_id,
+    ) == (name, "Tio João")
 
 
 def test_a_users_rename_follows_the_code_only_for_them(monkeypatch):
@@ -238,6 +242,29 @@ def test_a_users_rename_follows_the_code_only_for_them(monkeypatch):
 
     assert save(ana, 11)[1] == renamed  # type: ignore[index]  # her next receipt follows her rename
     assert save(bia, 11)[1] == product_id  # type: ignore[index]  # Bia gets the LLM's product
+
+
+def test_brand_key_ignores_case_accents_and_spaces():
+    assert brand_key("Pilão") == brand_key(" PILAO ") == brand_key("pilão") == "pilao"
+    assert brand_key("Tio  João") == "tio joao"
+
+
+def test_upsert_brand_dedupes_spellings_and_keeps_the_first():
+    first = f"Pilão {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        a = upsert_brand(conn, first)
+        b = upsert_brand(conn, first.upper().replace("Ã", "A"))
+    assert a == b
+    assert row("SELECT name, logo, searched_at FROM brands WHERE id = %s", a) == (first, None, None)
+
+
+def test_unbranded_products_still_dedupe():
+    name = f"Banana prata {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        a = upsert_product(conn, name, None, None, None)
+        b = upsert_product(conn, name.lower(), None, None, None)
+    assert a == b
+    assert row("SELECT brand_id FROM products WHERE id = %s", a) == (None,)
 
 
 def test_s3_failure_rolls_back_db(monkeypatch):

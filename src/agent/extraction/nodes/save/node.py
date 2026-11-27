@@ -1,4 +1,5 @@
 import mimetypes
+import unicodedata
 from uuid import UUID
 
 import boto3
@@ -52,6 +53,26 @@ def find_or_create_product(
     return upsert_product(conn, p.name, p.brand, p.package_size, p.package_unit)
 
 
+def brand_key(name: str) -> str:
+    """What makes two spellings the same brand: "Pilão", " PILAO " and "pilão" → "pilao"."""
+    decomposed = unicodedata.normalize("NFKD", name)
+    plain = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(plain.casefold().split())
+
+
+def upsert_brand(conn: psycopg.Connection, name: str) -> UUID:
+    """Id of the brand with this name (see brand_key), created if new.
+    Keeps the first saved spelling."""
+    # DO UPDATE (a no-op) instead of DO NOTHING, so RETURNING also gives the id of an existing row.
+    row = conn.execute(
+        """INSERT INTO brands (name, key) VALUES (%s, %s)
+           ON CONFLICT (key) DO UPDATE SET name = brands.name
+           RETURNING id""",
+        (name, brand_key(name)),
+    ).fetchone()
+    return row[0]  # type: ignore[index]
+
+
 def upsert_product(
     conn: psycopg.Connection,
     name: str,
@@ -59,17 +80,19 @@ def upsert_product(
     package_size: float | None,
     package_unit: str | None,
 ) -> UUID:
-    """Id of the product with these values (name and brand ignoring case), created if new.
+    """Id of the product with these values (name ignoring case), created if new.
+    The brand comes in as text and becomes brand_id here (see upsert_brand).
     Never changes an existing product: it's shared by every user's items."""
+    brand_id = upsert_brand(conn, brand) if brand else None
     # The ON CONFLICT columns must match products_identity_idx (schema.sql) exactly.
     # DO UPDATE (a no-op that keeps the saved casing) instead of DO NOTHING,
     # so RETURNING also gives the id of an existing row.
     row = conn.execute(
-        """INSERT INTO products (name, brand, package_size, package_unit) VALUES (%s, %s, %s, %s)
-           ON CONFLICT (lower(name), lower(brand), package_size, package_unit)
+        """INSERT INTO products (name, brand_id, package_size, package_unit) VALUES (%s, %s, %s, %s)
+           ON CONFLICT (lower(name), brand_id, package_size, package_unit)
            DO UPDATE SET name = products.name
            RETURNING id""",
-        (name, brand, package_size, package_unit),
+        (name, brand_id, package_size, package_unit),
     ).fetchone()
     return row[0]  # type: ignore[index]
 

@@ -37,19 +37,29 @@ CREATE TABLE purchases (
 CREATE INDEX ON purchases (user_id);
 CREATE INDEX ON purchases (store_id);
 
+-- One row per brand, shared by every user. Its logo is searched in the background after an upload.
+CREATE TABLE brands (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        text NOT NULL,         -- spelling of the first time it was saved ("Pilão")
+    key         text NOT NULL UNIQUE,  -- name normalized: lowercase, no accents, single spaces ("pilao")
+    logo        text,                  -- URL found on the web; NULL = not found (or not searched yet)
+    searched_at timestamptz,           -- NULL = logo not searched yet
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- Standardized product, the same across stores (interpreted by the LLM from raw_description).
 CREATE TABLE products (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name         text NOT NULL,  -- casing of the first time it was saved
-    brand        text,
+    brand_id     uuid REFERENCES brands (id),  -- NULL = no brand
     package_size numeric,  -- in package_unit; NULL for items sold by weight/volume
     package_unit text CHECK (package_unit IN ('g', 'ml', 'un')),
     created_at   timestamptz NOT NULL DEFAULT now()
 );
 -- Product identity. lower(): "Café" and "café" are the same product.
--- NULLS NOT DISTINCT: two "Banana prata" with brand NULL are the same product, not two.
+-- NULLS NOT DISTINCT: two "Banana prata" with brand_id NULL are the same product, not two.
 CREATE UNIQUE INDEX products_identity_idx
-    ON products (lower(name), lower(brand), package_size, package_unit) NULLS NOT DISTINCT;
+    ON products (lower(name), brand_id, package_size, package_unit) NULLS NOT DISTINCT;
 
 CREATE TABLE purchase_items (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
