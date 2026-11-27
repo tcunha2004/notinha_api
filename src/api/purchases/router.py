@@ -5,11 +5,11 @@ import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from psycopg.rows import dict_row
-from pydantic import BaseModel, Field
 
-from agent.extraction.nodes.save.node import s3
+from agent.extraction.nodes.save.node import s3, upsert_product
 from api.auth import current_user_id
 from api.config.config import DATABASE_URL, S3_BUCKET_NAME
+from api.purchases.schemas import ItemIn, PurchaseIn
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
 
@@ -21,20 +21,43 @@ _FLAGGED = """(i.quantity IS NULL OR i.unit_price IS NULL OR i.total_amount IS N
     OR (abs(i.quantity * i.unit_price - i.total_amount) >= 0.01
         AND abs(i.quantity * i.unit_price - i.discount - i.total_amount) >= 0.01))"""
 
+
+def _when(alias: str) -> str:
+    """When the purchase happened. Unreadable date: falls back to the upload time."""
+    return f"COALESCE({alias}.purchased_at, {alias}.created_at AT TIME ZONE 'America/Sao_Paulo')"
+
+
 # Numbers come back as float8 so they reach the frontend as JSON numbers, not strings.
+# previous_unit_price (price trend): what the user paid per unit for the same product, sold in the
+# same unit, in their latest purchase before this one. NULL for a product's first purchase.
 _ITEMS_SQL = f"""
-    SELECT i.id, i.purchase_id, i.position, i.raw_description, i.description, i.code,
+    SELECT i.id, i.purchase_id, i.position, i.raw_description, i.code,
            COALESCE(i.quantity, 0)::float8 AS quantity, COALESCE(i.unit, 'UN') AS unit,
            COALESCE(i.unit_price, 0)::float8 AS unit_price, i.discount::float8 AS discount,
-           COALESCE(i.total_amount, 0)::float8 AS total_amount, {_FLAGGED} AS flagged
+           COALESCE(i.total_amount, 0)::float8 AS total_amount, {_FLAGGED} AS flagged,
+           prev.unit_price::float8 AS previous_unit_price,
+           pr.id AS product_id, pr.name AS product_name,
+           b.name AS product_brand, b.logo AS product_brand_logo,
+           pr.package_size::float8 AS product_package_size, pr.package_unit AS product_package_unit
     FROM purchase_items i JOIN purchases p ON p.id = i.purchase_id
+    LEFT JOIN products pr ON pr.id = i.product_id
+    LEFT JOIN brands b ON b.id = pr.brand_id
+    LEFT JOIN LATERAL (
+        SELECT pi.unit_price
+        FROM purchase_items pi JOIN purchases pp ON pp.id = pi.purchase_id
+        WHERE pi.product_id = i.product_id AND pp.user_id = p.user_id
+          AND pi.unit_price IS NOT NULL
+          AND COALESCE(pi.unit, 'UN') = COALESCE(i.unit, 'UN')
+          AND {_when("pp")} < {_when("p")}
+        ORDER BY {_when("pp")} DESC, pi.position
+        LIMIT 1
+    ) prev ON true
     WHERE p.user_id = %s AND (%s::uuid IS NULL OR p.id = %s)
     ORDER BY i.position"""
 
-# Unreadable date: fall back to the upload time. Unreadable total: 0, so the "Diferença" row shows it.
-_PURCHASES_SQL = """
-    SELECT p.id, p.status, p.payment_method,
-           COALESCE(p.purchased_at, p.created_at AT TIME ZONE 'America/Sao_Paulo') AS purchased_at,
+# Unreadable total: 0, so the "Diferença" row shows it.
+_PURCHASES_SQL = f"""
+    SELECT p.id, p.status, p.payment_method, {_when("p")} AS purchased_at,
            COALESCE(p.total_amount, 0)::float8 AS total_amount,
            s.cnpj, s.name AS store_name, s.address, s.logo
     FROM purchases p LEFT JOIN stores s ON s.id = p.store_id
@@ -52,6 +75,9 @@ _REFRESH_STATUS_SQL = """
     WHERE p.id = %s"""
 
 
+_PRODUCT_FIELDS = ("id", "name", "brand", "brand_logo", "package_size", "package_unit")
+
+
 def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:
     """The user's purchases (newest first) with store and items, shaped like the frontend's Purchase."""
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:  # type: ignore
@@ -61,6 +87,8 @@ def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:
 
     by_purchase: dict[UUID, list[dict]] = {}
     for item in items:
+        product = {k: item.pop(f"product_{k}") for k in _PRODUCT_FIELDS}  # type: ignore
+        item["product"] = product if product["id"] else None  # type: ignore
         by_purchase.setdefault(item["purchase_id"], []).append(item)  # type: ignore
 
     purchases = []
@@ -74,27 +102,6 @@ def load_purchases(user_id: str, purchase_id: UUID | None = None) -> list[dict]:
         row["items"] = by_purchase.get(row["id"], [])  # type: ignore
         purchases.append(row)
     return purchases
-
-
-class ItemIn(BaseModel):
-    """What the user can correct. The line total is always recomputed from these."""
-
-    description: str = Field(min_length=1, max_length=200)
-    quantity: float = Field(gt=0, le=100_000)
-    unit: str = Field(min_length=1, max_length=10)
-    unit_price: float = Field(ge=0, le=1_000_000)
-    discount: float = Field(default=0, ge=0, le=1_000_000)
-
-    def values(self) -> tuple:
-        total = max(0.0, round(self.quantity * self.unit_price - self.discount, 2))
-        return (
-            self.description.strip(),
-            self.quantity,
-            self.unit,
-            self.unit_price,
-            self.discount,
-            total,
-        )
 
 
 def _get_one(user_id: str, purchase_id: UUID) -> dict:
@@ -130,11 +137,6 @@ def get_photo(purchase_id: UUID, user_id: User):
     return RedirectResponse(url)
 
 
-class PurchaseIn(BaseModel):
-    """The receipt total ("Valor a pagar"), e.g. when it was cut off in the photo."""
-
-    total_amount: float = Field(ge=0, le=1_000_000)
-
 
 @router.patch("/{purchase_id}")
 def update_purchase(purchase_id: UUID, body: PurchaseIn, user_id: User):
@@ -150,19 +152,31 @@ def update_purchase(purchase_id: UUID, body: PurchaseIn, user_id: User):
     return _get_one(user_id, purchase_id)
 
 
+def _product_id(conn: psycopg.Connection, body: ItemIn) -> UUID | None:
+    """The product to link: a new one by name ("Criar novo produto"), else the picked one."""
+    if new := body.new_product:
+        return upsert_product(conn, new.name, new.brand, new.package_size, new.package_unit)
+    if body.product_id and not conn.execute(
+        "SELECT 1 FROM products WHERE id = %s", (body.product_id,)
+    ).fetchone():
+        raise HTTPException(status_code=422, detail="Product not found")
+    return body.product_id
+
+
 @router.patch("/{purchase_id}/items/{item_id}")
 def update_item(purchase_id: UUID, item_id: UUID, body: ItemIn, user_id: User):
-    """Saves the correction and re-checks the purchase total. Returns the updated purchase."""
+    """Saves the correction (numbers and linked product) and re-checks the purchase total.
+    Returns the updated purchase. raw_description, what the receipt says, is never touched."""
     with psycopg.connect(DATABASE_URL) as conn:
         updated = conn.execute(
             """UPDATE purchase_items i
-               SET description = %s, quantity = %s, unit = %s, unit_price = %s,
+               SET product_id = %s, quantity = %s, unit = %s, unit_price = %s,
                    discount = %s, total_amount = %s
                FROM purchases p
                WHERE i.id = %s AND i.purchase_id = p.id AND p.id = %s AND p.user_id = %s""",
-            (*body.values(), item_id, purchase_id, user_id),
+            (_product_id(conn, body), *body.values(), item_id, purchase_id, user_id),
         ).rowcount
-        if not updated:
+        if not updated:  # the 404 rolls back a product created above
             raise HTTPException(status_code=404, detail="Item not found")
         conn.execute(_REFRESH_STATUS_SQL, (purchase_id,))
     return _get_one(user_id, purchase_id)
@@ -170,15 +184,18 @@ def update_item(purchase_id: UUID, item_id: UUID, body: ItemIn, user_id: User):
 
 @router.post("/{purchase_id}/items", status_code=201)
 def add_item(purchase_id: UUID, body: ItemIn, user_id: User):
-    """For a line the reading missed. Returns the updated purchase."""
+    """For a line the reading missed (no raw_description). Returns the updated purchase.
+    Needs a product: without one, nothing would name the item."""
+    if not (body.product_id or body.new_product):
+        raise HTTPException(status_code=422, detail="Choose a product")
     with psycopg.connect(DATABASE_URL) as conn:
         inserted = conn.execute(
             """INSERT INTO purchase_items
-                   (purchase_id, description, quantity, unit, unit_price, discount, total_amount)
+                   (purchase_id, product_id, quantity, unit, unit_price, discount, total_amount)
                SELECT id, %s, %s, %s, %s, %s, %s FROM purchases WHERE id = %s AND user_id = %s""",
-            (*body.values(), purchase_id, user_id),
+            (_product_id(conn, body), *body.values(), purchase_id, user_id),
         ).rowcount
-        if not inserted:
+        if not inserted:  # the 404 rolls back a product created above
             raise HTTPException(status_code=404, detail="Purchase not found")
         conn.execute(_REFRESH_STATUS_SQL, (purchase_id,))
     return _get_one(user_id, purchase_id)

@@ -9,10 +9,13 @@ import pytest
 from agent.extraction.nodes.extract.models import (
     ExtractionOutput,
     Item,
+    Product,
     Purchase,
     Store,
+    format_cnpj,
 )
 from agent.extraction.nodes.save import node as save_node
+from agent.extraction.nodes.save.node import brand_key, upsert_brand, upsert_product
 from agent.extraction.state import GraphState, MediaType, SaveStatus
 from api.auth import load_user, upsert_user  # bound before conftest's in-memory patch
 from api.config.config import DATABASE_URL
@@ -24,8 +27,14 @@ except psycopg.OperationalError:
         "Postgres not running (docker compose up -d postgres)", allow_module_level=True
     )
 
+def random_cnpj() -> str:
+    """A fresh valid CNPJ per run: exactly one of the 100 possible check-digit suffixes passes."""
+    base = f"{uuid4().int % 10**12:012}"
+    return next(c for i in range(100) if format_cnpj(c := f"{base}{i:02}"))
+
+
 DATA = ExtractionOutput(
-    store=Store(name="Mercado", id=f"cnpj-{uuid4()}", address="Rua A"),
+    store=Store(name="Mercado", id=random_cnpj(), address="Rua A"),
     purchase=Purchase(
         total_amount=12.9,
         payment_method="PIX",
@@ -149,6 +158,135 @@ def test_same_store_date_and_time_is_refused_before_any_insert(monkeypatch):
 
     # Another user with the same receipt is not a duplicate.
     save_node.node_save(state(new_user()))
+
+
+def test_links_items_to_products(monkeypatch):
+    monkeypatch.setattr(save_node, "s3", FakeS3())
+    user_id = new_user()
+    name = f"Arroz {uuid4()}"  # unique per run: the products table outlives the tests
+    store_a, store_b = random_cnpj(), random_cnpj()
+
+    def save(cnpj, hour, product_name, code, brand="Tio João"):
+        s = state(user_id)
+        s["data"] = DATA.model_copy(
+            update={
+                "store": Store(name="Mercado", id=cnpj),
+                "purchase": Purchase(purchased_at=datetime(2025, 3, 15, hour)),
+                "items": [
+                    Item(
+                        raw_description="ARROZ TIO JOAO 5KG",
+                        code=code,
+                        product=Product(
+                            name=product_name,
+                            brand=brand,
+                            package_size=5000,
+                            package_unit="g",
+                        ),
+                    ),
+                    Item(raw_description="XPTO", code="999"),  # LLM couldn't interpret it
+                ],
+            }
+        )
+        save_node.node_save(s)
+        with psycopg.connect(DATABASE_URL) as conn:
+            return [
+                r[0]
+                for r in conn.execute(
+                    "SELECT product_id FROM purchase_items WHERE purchase_id = %s ORDER BY position",
+                    (s["uuid"],),
+                )
+            ]
+
+    product_id, no_product = save(store_a, 10, name, code="001")
+    assert product_id is not None and no_product is None
+
+    # Same store + code wins, even with a different name from the LLM.
+    assert save(store_a, 11, f"{name} branco", code="001") == [product_id, None]
+    # Another store, unknown code: found by name + brand + size + unit.
+    assert save(store_b, 12, name, code="777") == [product_id, None]
+    # Casing doesn't matter, and the first saved casing is kept.
+    assert save(store_b, 13, name.upper(), code="888", brand="TIO JOÃO") == [product_id, None]
+
+    assert row("SELECT count(*) FROM products WHERE name ILIKE %s", f"{name}%") == (1,)
+    assert row(
+        "SELECT p.name, b.name FROM products p JOIN brands b ON b.id = p.brand_id WHERE p.id = %s",
+        product_id,
+    ) == (name, "Tio João")
+
+
+def test_a_users_rename_follows_the_code_only_for_them(monkeypatch):
+    monkeypatch.setattr(save_node, "s3", FakeS3())
+    cnpj, name = random_cnpj(), f"Feijão {uuid4()}"
+
+    def save(user_id, hour):
+        s = state(user_id)
+        s["data"] = DATA.model_copy(
+            update={
+                "store": Store(name="Mercado", id=cnpj),
+                "purchase": Purchase(purchased_at=datetime(2025, 3, 15, hour)),
+                "items": [
+                    Item(raw_description="FEIJAO", code="001", product=Product(name=name))
+                ],
+            }
+        )
+        save_node.node_save(s)
+        return row("SELECT id, product_id FROM purchase_items WHERE purchase_id = %s", s["uuid"])
+
+    ana, bia = new_user(), new_user()
+    item_id, product_id = save(ana, 10)  # type: ignore[misc]
+
+    # Ana renames her item (what PATCH /items does): it now points to another product.
+    with psycopg.connect(DATABASE_URL) as conn:
+        renamed = save_node.upsert_product(conn, f"{name} da vovó", None, None, None)
+        conn.execute("UPDATE purchase_items SET product_id = %s WHERE id = %s", (renamed, item_id))
+
+    assert save(ana, 11)[1] == renamed  # type: ignore[index]  # her next receipt follows her rename
+    assert save(bia, 11)[1] == product_id  # type: ignore[index]  # Bia gets the LLM's product
+
+
+def test_brand_key_ignores_case_accents_and_spaces():
+    assert brand_key("Pilão") == brand_key(" PILAO ") == brand_key("pilão") == "pilao"
+    assert brand_key("Tio  João") == "tio joao"
+
+
+def test_upsert_brand_dedupes_spellings_and_keeps_the_first():
+    first = f"Pilão {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        a = upsert_brand(conn, first)
+        b = upsert_brand(conn, first.upper().replace("Ã", "A"))
+    assert a == b
+    assert row("SELECT name, logo, searched_at FROM brands WHERE id = %s", a) == (first, None, None)
+
+
+def test_upsert_brand_does_not_lock_an_existing_brand():
+    """Brands are shared by many receipts, and a save holds its transaction through the S3 upload."""
+    name = f"Nestlé {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        brand_id = upsert_brand(conn, name)
+    with psycopg.connect(DATABASE_URL) as first, psycopg.connect(DATABASE_URL) as second:
+        upsert_brand(first, name)  # transaction still open
+        second.execute("SET lock_timeout = '1s'")
+        assert upsert_brand(second, name) == brand_id
+
+
+def test_brand_spaces_are_cleaned_and_blank_means_no_brand():
+    brand, name = f"Itambé {uuid4()}", f"Leite {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        spaced = upsert_product(conn, name, f"  {brand}  ", None, None)
+        blank = upsert_product(conn, f"{name} 2", "   ", None, None)
+    assert row(
+        "SELECT b.name FROM products p JOIN brands b ON b.id = p.brand_id WHERE p.id = %s", spaced
+    ) == (brand,)
+    assert row("SELECT brand_id FROM products WHERE id = %s", blank) == (None,)
+
+
+def test_unbranded_products_still_dedupe():
+    name = f"Banana prata {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        a = upsert_product(conn, name, None, None, None)
+        b = upsert_product(conn, name.lower(), None, None, None)
+    assert a == b
+    assert row("SELECT brand_id FROM products WHERE id = %s", a) == (None,)
 
 
 def test_s3_failure_rolls_back_db(monkeypatch):

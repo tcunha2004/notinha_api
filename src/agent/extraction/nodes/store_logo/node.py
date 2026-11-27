@@ -30,15 +30,13 @@ def brand_name(cnpj: str, fallback: str | None) -> str | None:
     return (r.json().get("nome_fantasia") if r.is_success else None) or fallback
 
 
-def find_logo(cnpj: str, legal_name: str | None) -> str | None:
-    name = brand_name(cnpj, legal_name)
-    if not name:
-        return None
+def search_logo(query: str) -> str | None:
+    """Logo URL for the query, or None when the search has none. Raises httpx.HTTPError on failure."""
     r = httpx.post(
         "https://api.tavily.com/search",
         headers={"Authorization": f"Bearer {TAVILY_API_KEY}"},
         json={
-            "query": f"{name} loja logo",
+            "query": query,
             "include_images": True,
             "include_image_descriptions": True,
             "max_results": 5,
@@ -46,7 +44,12 @@ def find_logo(cnpj: str, legal_name: str | None) -> str | None:
         timeout=15,
     )
     r.raise_for_status()
-    return pick_logo(r.json().get("images", []))
+    return pick_logo(r.json().get("images") or [])
+
+
+def find_logo(cnpj: str, legal_name: str | None) -> str | None:
+    name = brand_name(cnpj, legal_name)
+    return search_logo(f"{name} loja logo") if name else None
 
 
 def node_store_logo(state: GraphState) -> dict:

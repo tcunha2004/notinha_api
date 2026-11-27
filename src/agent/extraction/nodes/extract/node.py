@@ -1,9 +1,6 @@
 import base64
 from typing import Literal
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.types import Command
-
 from agent.extraction.config import LLM
 from agent.extraction.nodes.extract.models import ExtractionResponse
 from agent.extraction.nodes.extract.prompts import (
@@ -11,12 +8,18 @@ from agent.extraction.nodes.extract.prompts import (
     extract_user_prompt,
 )
 from agent.extraction.state import GraphState, SaveStatus
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.types import Command
 
 MAX_EXTRACTION_TRIES = 2
 
 
 class UnreadableInvoice(Exception):
-    """Nothing at all could be read from the image (illegible, or not an NFC-e)."""
+    """Nothing at all could be read from the image (too blurry, cut off...)."""
+
+
+class InvalidInvoice(Exception):
+    """The image is not a valid invoice from a supermarket/pharmacy"""
 
 
 def node_extract_data(state: GraphState) -> Command[Literal["extract", "store_logo"]]:
@@ -38,10 +41,13 @@ def node_extract_data(state: GraphState) -> Command[Literal["extract", "store_lo
         ]
     )
 
+    if response is not None and response.invalid:
+        raise InvalidInvoice("The invoice is not valid")
+
     if response is None or response.data is None:
         raise UnreadableInvoice("Could not extract any data from the invoice image")
 
-    if response.error:
+    if response.missing:
         tries = state.get("extraction_tries", 0) + 1
         if tries >= MAX_EXTRACTION_TRIES:
             return Command(
