@@ -54,7 +54,7 @@ One entry per printed item line, in order. A product bought twice on separate li
 <product>
 Standardize raw_description so the same product gets the same values on any receipt from any store.
 Expand abbreviations using your knowledge of Brazilian products and brands, but describe only what raw_description says: don't add attributes that aren't printed.
-- name: generic product in Portuguese, sentence case, with accents. Include the printed variants (type, flavor, "integral", "sem açúcar"); leave out brand, size and packaging.
+- name: generic product in Portuguese, sentence case, with accents. Include printed variants that change what the product is (e.g. "branco", "integral", "parboilizado", "sem açúcar", flavor); leave out brand, size, packaging and quality grades or classifications ("tipo 1", "T1", "extra", "especial", "premium").
 - brand: correctly spelled and capitalized; null for unbranded items or when you can't tell.
 - package_size and package_unit: net content of one unit as sold, converted to "g", "ml" or "un"; multiply multipacks. Both null when the item is sold by weight or volume (item unit KG, G, L), because unit_price is already per measure.
 Examples:
@@ -63,6 +63,7 @@ Examples:
 - "CERV SKOL LT 350ML C/12" -> name="Cerveja", brand="Skol", package_size=4200, package_unit="ml"
 - "OVOS BRANCOS GDE C/12" -> name="Ovos brancos grandes", brand=null, package_size=12, package_unit="un"
 - "BANANA PRATA KG" -> name="Banana prata", brand=null, package_size=null, package_unit=null
+- "ARROZ BRANCO T1 5KG" -> name="Arroz branco", brand=null, package_size=5000, package_unit="g"
 If raw_description is too cryptic to identify the product, set "product" to null.
 </product>
 

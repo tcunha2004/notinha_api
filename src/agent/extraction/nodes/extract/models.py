@@ -18,8 +18,9 @@ class Product(BaseModel):
         min_length=1,
         description=(
             "Generic product name in Portuguese, abbreviations expanded, accents fixed, sentence case. "
-            "Include the printed variant (type, flavor, version), "
-            "but not the brand, size or packaging. e.g. 'Café', 'Leite integral', 'Açúcar mascavo'"
+            "Include printed variants that change what the product is (e.g. integral, sem açúcar, flavor), "
+            "but not the brand, size, packaging or quality grade (tipo 1, extra, premium). "
+            "e.g. 'Café', 'Leite integral', 'Arroz branco'"
         ),
     )
     brand: str | None = Field(
