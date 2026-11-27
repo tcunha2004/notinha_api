@@ -7,7 +7,7 @@ import time
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException, UploadFile
+from fastapi import BackgroundTasks, HTTPException, UploadFile
 from langgraph.types import Command
 from starlette.datastructures import Headers
 
@@ -19,7 +19,15 @@ from api.invoice import router as invoice_router
 
 
 @pytest.fixture
-def upload(client, redis_client, monkeypatch):
+def scheduled(monkeypatch):
+    """Stands in for the brand logo search (no web calls in tests) and records each run."""
+    calls = []
+    monkeypatch.setattr(invoice_router, "fill_brand_logos", lambda: calls.append(1))
+    return calls
+
+
+@pytest.fixture
+def upload(client, redis_client, monkeypatch, scheduled):
     redis_client.set("session:abc", "user-1")
     client.cookies.set("session", "abc")
 
@@ -109,7 +117,7 @@ def read_receipt(monkeypatch, *, reading_takes: float, leaves_mid_reading: bool)
         io.BytesIO(b"jpeg-bytes"), size=10, headers=Headers({"content-type": "image/jpeg"})
     )
     try:
-        asyncio.run(invoice_router.upload_invoice(Request(), image, "user-1"))
+        asyncio.run(invoice_router.upload_invoice(Request(), BackgroundTasks(), image, "user-1"))
         status = 200
     except HTTPException as error:
         status = error.status_code
@@ -126,3 +134,19 @@ def test_reading_to_the_end_saves(monkeypatch):
 def test_user_leaving_mid_reading_saves_nothing(monkeypatch):
     status, saved = read_receipt(monkeypatch, reading_takes=1, leaves_mid_reading=True)
     assert (status, saved) == (499, [])
+
+
+def test_saved_purchase_schedules_brand_logo_search(upload, scheduled):
+    assert upload(lambda s: {"save_status": SaveStatus.OK}).status_code == 200
+    assert scheduled == [1]  # TestClient runs background tasks after the response
+
+
+@pytest.mark.parametrize(
+    "error, status", [(UnreadableInvoice("x"), 422), (DuplicatePurchase(uuid4()), 409)]
+)
+def test_failed_upload_schedules_nothing(upload, scheduled, error, status):
+    def invoke(_state):
+        raise error
+
+    assert upload(invoke).status_code == status
+    assert scheduled == []

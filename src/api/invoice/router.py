@@ -2,8 +2,9 @@ import asyncio
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
 
+from agent.brand_logo import fill_brand_logos
 from agent.extraction.graph import Graph
 from agent.extraction.nodes.extract.node import InvalidInvoice, UnreadableInvoice
 from agent.extraction.nodes.save.node import DuplicatePurchase
@@ -20,6 +21,7 @@ graph = Graph()
 @router.post("/upload_invoice")
 async def upload_invoice(
     request: Request,
+    background_tasks: BackgroundTasks,
     image: UploadFile,
     user_id: Annotated[str, Depends(current_user_id)],
 ):
@@ -64,4 +66,6 @@ async def upload_invoice(
             status_code=409,
             detail={"message": str(e), "purchase_id": str(e.purchase_id)},
         ) from e
+    # Runs after the response, so "Processando" doesn't wait for the logos.
+    background_tasks.add_task(fill_brand_logos)
     return {"id": uuid, "status": result["save_status"]}
