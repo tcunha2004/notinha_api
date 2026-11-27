@@ -1,14 +1,35 @@
-from typing import Annotated
+from typing import Annotated, Literal, Self
+from uuid import UUID
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, model_validator
+
+# Stripped before the length check, so "   " is rejected instead of saved as "".
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
+class NewProductIn(BaseModel):
+    """A product the user creates in the edit sheet. Same columns as the products table."""
+
+    name: Text
+    brand: Text | None = None
+    # Both or neither: None for items sold by weight/volume (bananas, bread by the kg).
+    package_size: float | None = Field(default=None, gt=0, le=1_000_000)
+    package_unit: Literal["g", "ml", "un"] | None = None
+
+    @model_validator(mode="after")
+    def size_needs_unit(self) -> Self:
+        if (self.package_size is None) != (self.package_unit is None):
+            raise ValueError("package_size and package_unit go together")
+        return self
 
 
 class ItemIn(BaseModel):
     """What the user can correct. The line total is always recomputed from these."""
 
-    # The product's name: the item is linked to the product with this name.
-    # Stripped before the length check, so "   " is rejected instead of saved as "".
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    # The product picked in the edit sheet; None leaves the item unidentified.
+    product_id: UUID | None = None
+    # "Criar novo produto": created on save (or the identical one found) and linked; wins over product_id.
+    new_product: NewProductIn | None = None
     quantity: float = Field(gt=0, le=100_000)
     unit: str = Field(min_length=1, max_length=10)
     unit_price: float = Field(ge=0, le=1_000_000)

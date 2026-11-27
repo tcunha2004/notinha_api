@@ -57,49 +57,46 @@ def test_other_users_purchase_is_404(saved, redis_client):
         upsert_user({"sub": f"x-{uuid4()}", "email": "x", "name": "", "picture": ""}),
     )
     assert client.get(f"/purchases/{pid}").status_code == 404
-    item = {"name": "X", "quantity": 1, "unit": "UN", "unit_price": 1}
+    item = {"new_product": {"name": "X"}, "quantity": 1, "unit": "UN", "unit_price": 1}
     assert client.post(f"/purchases/{pid}/items", json=item).status_code == 404
 
 
 def test_editing_an_item_recomputes_total_and_status(saved):
     client, pid = saved
     banana = client.get(f"/purchases/{pid}").json()["items"][1]
-    # Only the numbers fixed (name still the receipt text): stays without a product.
-    numbers_only = {"name": "BANANA", "quantity": 0.5, "unit": "KG", "unit_price": 10}
-    body = client.patch(f"/purchases/{pid}/items/{banana['id']}", json=numbers_only).json()
-    assert body["items"][1]["product"] is None
+    url = f"/purchases/{pid}/items/{banana['id']}"
+    # No product picked (only the numbers fixed): stays without a product.
+    numbers_only = {"quantity": 0.5, "unit": "KG", "unit_price": 10}
+    assert client.patch(url, json=numbers_only).json()["items"][1]["product"] is None
 
-    edit = {
-        "name": "Banana prata",
-        "quantity": 0.5,
-        "unit": "KG",
-        "unit_price": 10,
-        "discount": 0,
-    }
-    body = client.patch(f"/purchases/{pid}/items/{banana['id']}", json=edit).json()
+    # "Criar novo produto" creates it, with brand and package, and links it.
+    banana = {"name": f"Banana {uuid4()}", "brand": "Sítio", "package_size": 1000, "package_unit": "g"}
+    edit = {"new_product": banana, "quantity": 0.5, "unit": "KG", "unit_price": 10}
+    body = client.patch(url, json=edit).json()
     item = body["items"][1]
-    assert (item["product"]["name"], item["total_amount"], item["flagged"]) == (
-        "Banana prata",
-        5.0,
-        False,
-    )
-    assert (
-        item["raw_description"] == "BANANA"
-    )  # what the receipt says is never overwritten
+    assert {k: item["product"][k] for k in banana} == banana
+    assert (item["total_amount"], item["flagged"]) == (5.0, False)
+    assert item["raw_description"] == "BANANA"  # what the receipt says is never overwritten
     assert body["status"] == "needs_review"  # 7.00 + 5.00 ≠ 12.90
 
-    edit["unit_price"] = 11.8  # 0.5 × 11.80 = 5.90 → adds up again
-    assert (
-        client.patch(f"/purchases/{pid}/items/{banana['id']}", json=edit).json()[
-            "status"
-        ]
-        == "ok"
-    )
+    # Picking an existing product links that one; it shows up in the picker's list.
+    products = client.get("/products").json()
+    other = next(p for p in products if p["id"] != item["product"]["id"])
+    pick = {"product_id": other["id"], "quantity": 0.5, "unit": "KG", "unit_price": 11.8}
+    body = client.patch(url, json=pick).json()  # 0.5 × 11.80 = 5.90 → adds up again
+    assert body["items"][1]["product"]["id"] == other["id"] and body["status"] == "ok"
+
+
+def test_unknown_product_is_rejected(saved):
+    client, pid = saved
+    banana = client.get(f"/purchases/{pid}").json()["items"][1]
+    pick = {"product_id": str(uuid4()), "quantity": 1, "unit": "UN", "unit_price": 1}
+    assert client.patch(f"/purchases/{pid}/items/{banana['id']}", json=pick).status_code == 422
 
 
 def test_adding_an_item_goes_last_and_rechecks(saved):
     client, pid = saved
-    new = {"name": "Sacola", "quantity": 1, "unit": "UN", "unit_price": 0.1}
+    new = {"new_product": {"name": "Sacola"}, "quantity": 1, "unit": "UN", "unit_price": 0.1}
     response = client.post(f"/purchases/{pid}/items", json=new)
     assert response.status_code == 201
     body = response.json()
@@ -112,8 +109,13 @@ def test_adding_an_item_goes_last_and_rechecks(saved):
 
 def test_invalid_item_is_rejected(saved):
     client, pid = saved
-    bad = {"name": "   ", "quantity": -1, "unit": "UN", "unit_price": 1}
+    bad = {"new_product": {"name": "   "}, "quantity": -1, "unit": "UN", "unit_price": 1}
     assert client.post(f"/purchases/{pid}/items", json=bad).status_code == 422
+    size_without_unit = {"name": "Café", "package_size": 500}
+    bad = {"new_product": size_without_unit, "quantity": 1, "unit": "UN", "unit_price": 1}
+    assert client.post(f"/purchases/{pid}/items", json=bad).status_code == 422
+    no_product = {"quantity": 1, "unit": "UN", "unit_price": 1}
+    assert client.post(f"/purchases/{pid}/items", json=no_product).status_code == 422
     assert client.get("/purchases/not-a-uuid").status_code == 422
 
 

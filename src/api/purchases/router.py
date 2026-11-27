@@ -132,47 +132,50 @@ def update_purchase(purchase_id: UUID, body: PurchaseIn, user_id: User):
     return _get_one(user_id, purchase_id)
 
 
+def _product_id(conn: psycopg.Connection, body: ItemIn) -> UUID | None:
+    """The product to link: a new one by name ("Criar novo produto"), else the picked one."""
+    if new := body.new_product:
+        return upsert_product(conn, new.name, new.brand, new.package_size, new.package_unit)
+    if body.product_id and not conn.execute(
+        "SELECT 1 FROM products WHERE id = %s", (body.product_id,)
+    ).fetchone():
+        raise HTTPException(status_code=422, detail="Product not found")
+    return body.product_id
+
+
 @router.patch("/{purchase_id}/items/{item_id}")
 def update_item(purchase_id: UUID, item_id: UUID, body: ItemIn, user_id: User):
-    """Saves the correction and re-checks the purchase total. Returns the updated purchase.
-    The name links the item to the product with that name, keeping the brand and size it had."""
+    """Saves the correction (numbers and linked product) and re-checks the purchase total.
+    Returns the updated purchase. raw_description, what the receipt says, is never touched."""
     with psycopg.connect(DATABASE_URL) as conn:
-        current = conn.execute(
-            """SELECT i.raw_description, i.product_id, pr.brand, pr.package_size, pr.package_unit
-               FROM purchase_items i JOIN purchases p ON p.id = i.purchase_id
-               LEFT JOIN products pr ON pr.id = i.product_id
-               WHERE i.id = %s AND p.id = %s AND p.user_id = %s""",
-            (item_id, purchase_id, user_id),
-        ).fetchone()
-        if current is None:
-            raise HTTPException(status_code=404, detail="Item not found")
-        raw_description, product_id, *brand_and_size = current
-        # The form always sends a name. An unidentified item whose name is still the
-        # receipt text (only numbers were fixed) stays without a product.
-        if product_id or body.name != raw_description:
-            product_id = upsert_product(conn, body.name, *brand_and_size)
-        conn.execute(
-            """UPDATE purchase_items
+        updated = conn.execute(
+            """UPDATE purchase_items i
                SET product_id = %s, quantity = %s, unit = %s, unit_price = %s,
                    discount = %s, total_amount = %s
-               WHERE id = %s""",
-            (product_id, *body.values(), item_id),
-        )
+               FROM purchases p
+               WHERE i.id = %s AND i.purchase_id = p.id AND p.id = %s AND p.user_id = %s""",
+            (_product_id(conn, body), *body.values(), item_id, purchase_id, user_id),
+        ).rowcount
+        if not updated:  # the 404 rolls back a product created above
+            raise HTTPException(status_code=404, detail="Item not found")
         conn.execute(_REFRESH_STATUS_SQL, (purchase_id,))
     return _get_one(user_id, purchase_id)
 
 
 @router.post("/{purchase_id}/items", status_code=201)
 def add_item(purchase_id: UUID, body: ItemIn, user_id: User):
-    """For a line the reading missed (no raw_description). Returns the updated purchase."""
+    """For a line the reading missed (no raw_description). Returns the updated purchase.
+    Needs a product: without one, nothing would name the item."""
+    if not (body.product_id or body.new_product):
+        raise HTTPException(status_code=422, detail="Choose a product")
     with psycopg.connect(DATABASE_URL) as conn:
         inserted = conn.execute(
             """INSERT INTO purchase_items
                    (purchase_id, product_id, quantity, unit, unit_price, discount, total_amount)
                SELECT id, %s, %s, %s, %s, %s, %s FROM purchases WHERE id = %s AND user_id = %s""",
-            (upsert_product(conn, body.name, None, None, None), *body.values(), purchase_id, user_id),
+            (_product_id(conn, body), *body.values(), purchase_id, user_id),
         ).rowcount
-        if not inserted:  # the 404 rolls back the product created above
+        if not inserted:  # the 404 rolls back a product created above
             raise HTTPException(status_code=404, detail="Purchase not found")
         conn.execute(_REFRESH_STATUS_SQL, (purchase_id,))
     return _get_one(user_id, purchase_id)
