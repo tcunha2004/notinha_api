@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -107,16 +108,24 @@ class Store(BaseModel):
         return value and format_cnpj(value)
 
 
+class PaymentMethod(StrEnum):
+    """Same values as the payment_method enum in db/schema.sql"""
+
+    DEBITO = "DÉBITO"
+    CREDITO = "CRÉDITO"
+    PIX = "PIX"
+    DINHEIRO = "DINHEIRO"
+
+
 class Purchase(BaseModel):
     """Purchase totals and payment info"""
 
     total_amount: float | None = Field(
         default=None, description="Total paid ('Valor a Pagar')"
     )
-    payment_method: str | None = Field(
+    payment_method: PaymentMethod | None = Field(
         default=None,
-        min_length=1,
-        description="Payment method as printed, e.g. Dinheiro, Cartão de Crédito, PIX",
+        description="Payment method: DÉBITO (debit card), CRÉDITO (credit card), PIX or DINHEIRO (cash). Null for any other",
     )
     purchased_at: datetime | None = Field(
         default=None, description="Date and time of the purchase ('Emissão')"

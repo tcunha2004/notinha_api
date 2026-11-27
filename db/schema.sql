@@ -19,6 +19,9 @@ CREATE TABLE stores (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Same values as PaymentMethod in src/agent/extraction/nodes/extract/models.py
+CREATE TYPE payment_method AS ENUM ('DÉBITO', 'CRÉDITO', 'PIX', 'DINHEIRO');
+
 -- Nullable columns: a "needs_review" purchase may come from a partial extraction.
 CREATE TABLE purchases (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -26,7 +29,7 @@ CREATE TABLE purchases (
     store_id       uuid REFERENCES stores (id),
     purchased_at   timestamp,  -- local time as printed on the receipt, no timezone
     total_amount   numeric,
-    payment_method text,
+    payment_method payment_method,  -- NULL = not read, or another method
     s3_object_key  text NOT NULL,
     status         text NOT NULL CHECK (status IN ('ok', 'needs_review')),
     created_at     timestamptz NOT NULL DEFAULT now()

@@ -38,7 +38,7 @@ In the header at the top of the receipt.
 
 <purchase>
 - total_amount: "Valor a Pagar" (after discounts); if it isn't printed, "Valor Total".
-- payment_method: under "Forma de Pagamento", as printed; join several methods with ", ".
+- payment_method: under "Forma de Pagamento", one of "DÉBITO" (debit card), "CRÉDITO" (credit card), "PIX" or "DINHEIRO" (cash). With several methods, the one with the largest amount. Null for anything else.
 - purchased_at: the issue date ("Emissão" / "Data de Emissão"), not the authorization date ("Autorização" / "Protocolo").
 </purchase>
 
