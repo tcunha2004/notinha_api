@@ -3,6 +3,7 @@
 from datetime import datetime
 from uuid import uuid4
 
+import psycopg
 import pytest
 from test_save_node import (  # importing it also skips this file when Postgres is down
     DATA,
@@ -11,10 +12,10 @@ from test_save_node import (  # importing it also skips this file when Postgres 
 )
 
 from agent.extraction.nodes.extract.models import Purchase
-
 from agent.extraction.nodes.save import node as save_node
 from api.purchases import router as purchases_api
 from api.auth import upsert_user  # bound before conftest's in-memory patch
+from api.config.config import DATABASE_URL
 
 
 class FakeS3WithDelete(FakeS3):
@@ -84,8 +85,9 @@ def test_editing_an_item_recomputes_total_and_status(saved):
     assert body["status"] == "needs_review"  # 7.00 + 5.00 ≠ 12.90
 
     # Picking an existing product links that one; it shows up in the picker's list.
-    products = client.get("/products").json()
-    other = next(p for p in products if p["id"] != item["product"]["id"])
+    with psycopg.connect(DATABASE_URL) as conn:  # its own, so an empty database works too
+        other_id = str(save_node.upsert_product(conn, f"Outro {uuid4()}", None, None, None))
+    other = next(p for p in client.get("/products").json() if p["id"] == other_id)
     pick = {"product_id": other["id"], "quantity": 0.5, "unit": "KG", "unit_price": 11.8}
     body = client.patch(url, json=pick).json()  # 0.5 × 11.80 = 5.90 → adds up again
     assert body["items"][1]["product"]["id"] == other["id"] and body["status"] == "ok"
