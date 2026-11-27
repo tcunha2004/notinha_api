@@ -44,7 +44,7 @@ def search_logo(query: str) -> str | None:
         timeout=15,
     )
     r.raise_for_status()
-    return pick_logo(r.json().get("images", []))
+    return pick_logo(r.json().get("images") or [])
 
 
 def find_logo(cnpj: str, legal_name: str | None) -> str | None:

@@ -14,8 +14,8 @@ def fill_brand_logos(limit: int = 20) -> None:
     sent come first, and ones that keep failing don't block new ones.
     Runs after the upload response. Each round takes every pending brand, so a round lost to a
     restart is recovered by the next receipt."""
-    # ponytail: two receipts at once may search the same brand twice (one extra search);
-    # claim rows with FOR UPDATE SKIP LOCKED if that ever costs.
+    # ponytail: rounds that overlap (receipts sent before the previous round ends) search the same
+    # pending brands again; add a lock around the round (one API process) if the extra searches cost.
     if not TAVILY_API_KEY:
         return
     # autocommit: each brand is saved on its own, so a later failure doesn't undo it.

@@ -63,12 +63,17 @@ def brand_key(name: str) -> str:
 def upsert_brand(conn: psycopg.Connection, name: str) -> UUID:
     """Id of the brand with this name (see brand_key), created if new.
     Keeps the first saved spelling."""
-    # DO UPDATE (a no-op) instead of DO NOTHING, so RETURNING also gives the id of an existing row.
+    key = brand_key(name)
+    # Read first: an upsert would lock the row until commit, and a save keeps its transaction open
+    # through the S3 upload. Brands are shared by many receipts, so they'd wait or deadlock.
+    if row := conn.execute("SELECT id FROM brands WHERE key = %s", (key,)).fetchone():
+        return row[0]
+    # DO UPDATE (a no-op) covers another transaction creating it in between: RETURNING gives its id.
     row = conn.execute(
         """INSERT INTO brands (name, key) VALUES (%s, %s)
            ON CONFLICT (key) DO UPDATE SET name = brands.name
            RETURNING id""",
-        (name, brand_key(name)),
+        (name, key),
     ).fetchone()
     return row[0]  # type: ignore[index]
 
@@ -83,6 +88,7 @@ def upsert_product(
     """Id of the product with these values (name ignoring case), created if new.
     The brand comes in as text and becomes brand_id here (see upsert_brand).
     Never changes an existing product: it's shared by every user's items."""
+    brand = " ".join((brand or "").split())
     brand_id = upsert_brand(conn, brand) if brand else None
     # The ON CONFLICT columns must match products_identity_idx (schema.sql) exactly.
     # DO UPDATE (a no-op that keeps the saved casing) instead of DO NOTHING,

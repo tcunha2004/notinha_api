@@ -80,3 +80,8 @@ def test_node_never_blocks_on_failure_or_missing_cnpj(monkeypatch):
         "data": ExtractionOutput(store=Store(name="Mercado", id="03.821.728/0001-72"))
     }
     assert logo_node.node_store_logo(state) == {}  # type: ignore[arg-type]
+
+
+def test_search_with_null_images_finds_nothing(monkeypatch):
+    monkeypatch.setattr(logo_node.httpx, "post", lambda *a, **kw: FakeResponse(200, {"images": None}))
+    assert logo_node.search_logo("Pilão marca logo") is None

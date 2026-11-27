@@ -258,6 +258,28 @@ def test_upsert_brand_dedupes_spellings_and_keeps_the_first():
     assert row("SELECT name, logo, searched_at FROM brands WHERE id = %s", a) == (first, None, None)
 
 
+def test_upsert_brand_does_not_lock_an_existing_brand():
+    """Brands are shared by many receipts, and a save holds its transaction through the S3 upload."""
+    name = f"Nestlé {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        brand_id = upsert_brand(conn, name)
+    with psycopg.connect(DATABASE_URL) as first, psycopg.connect(DATABASE_URL) as second:
+        upsert_brand(first, name)  # transaction still open
+        second.execute("SET lock_timeout = '1s'")
+        assert upsert_brand(second, name) == brand_id
+
+
+def test_brand_spaces_are_cleaned_and_blank_means_no_brand():
+    brand, name = f"Itambé {uuid4()}", f"Leite {uuid4()}"
+    with psycopg.connect(DATABASE_URL) as conn:
+        spaced = upsert_product(conn, name, f"  {brand}  ", None, None)
+        blank = upsert_product(conn, f"{name} 2", "   ", None, None)
+    assert row(
+        "SELECT b.name FROM products p JOIN brands b ON b.id = p.brand_id WHERE p.id = %s", spaced
+    ) == (brand,)
+    assert row("SELECT brand_id FROM products WHERE id = %s", blank) == (None,)
+
+
 def test_unbranded_products_still_dedupe():
     name = f"Banana prata {uuid4()}"
     with psycopg.connect(DATABASE_URL) as conn:
