@@ -1,12 +1,16 @@
 """Purchase routes against the real Postgres: reading, ownership, item edits and the status re-check."""
 
+from datetime import datetime
 from uuid import uuid4
 
 import pytest
 from test_save_node import (  # importing it also skips this file when Postgres is down
+    DATA,
     FakeS3,
     state,
 )
+
+from agent.extraction.nodes.extract.models import Purchase
 
 from agent.extraction.nodes.save import node as save_node
 from api.purchases import router as purchases_api
@@ -164,3 +168,24 @@ def test_s3_failure_keeps_the_purchase(saved, monkeypatch):
     with pytest.raises(RuntimeError):
         client.delete(f"/purchases/{pid}")
     assert client.get(f"/purchases/{pid}").status_code == 200
+
+
+def test_items_carry_the_previous_purchase_unit_price(saved, redis_client):
+    """Price trend: each item knows what the same product cost in the user's purchase before it."""
+    client, first = saved
+    item = {"new_product": {"name": f"Arroz {uuid4()}"}, "quantity": 1, "unit": "UN", "unit_price": 10}
+    arroz = client.post(f"/purchases/{first}/items", json=item).json()["items"][-1]
+    assert arroz["previous_unit_price"] is None  # first time bought: nothing to compare
+
+    later = state(redis_client.get("session:abc"))
+    later["data"] = DATA.model_copy(
+        update={"purchase": Purchase(total_amount=24, purchased_at=datetime(2025, 4, 1, 10))}
+    )
+    save_node.node_save(later)
+    second = str(later["uuid"])
+    linked = {"product_id": arroz["product"]["id"], "quantity": 2, "unit_price": 12}
+    lines = client.post(f"/purchases/{second}/items", json={**linked, "unit": "UN"}).json()["items"]
+    assert lines[-1]["previous_unit_price"] == 10
+    # Sold by another unit: kg and un prices don't compare.
+    lines = client.post(f"/purchases/{second}/items", json={**linked, "unit": "KG"}).json()["items"]
+    assert lines[-1]["previous_unit_price"] is None

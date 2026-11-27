@@ -21,23 +21,41 @@ _FLAGGED = """(i.quantity IS NULL OR i.unit_price IS NULL OR i.total_amount IS N
     OR (abs(i.quantity * i.unit_price - i.total_amount) >= 0.01
         AND abs(i.quantity * i.unit_price - i.discount - i.total_amount) >= 0.01))"""
 
+
+def _when(alias: str) -> str:
+    """When the purchase happened. Unreadable date: falls back to the upload time."""
+    return f"COALESCE({alias}.purchased_at, {alias}.created_at AT TIME ZONE 'America/Sao_Paulo')"
+
+
 # Numbers come back as float8 so they reach the frontend as JSON numbers, not strings.
+# previous_unit_price (price trend): what the user paid per unit for the same product, sold in the
+# same unit, in their latest purchase before this one. NULL for a product's first purchase.
 _ITEMS_SQL = f"""
     SELECT i.id, i.purchase_id, i.position, i.raw_description, i.code,
            COALESCE(i.quantity, 0)::float8 AS quantity, COALESCE(i.unit, 'UN') AS unit,
            COALESCE(i.unit_price, 0)::float8 AS unit_price, i.discount::float8 AS discount,
            COALESCE(i.total_amount, 0)::float8 AS total_amount, {_FLAGGED} AS flagged,
+           prev.unit_price::float8 AS previous_unit_price,
            pr.id AS product_id, pr.name AS product_name, pr.brand AS product_brand,
            pr.package_size::float8 AS product_package_size, pr.package_unit AS product_package_unit
     FROM purchase_items i JOIN purchases p ON p.id = i.purchase_id
     LEFT JOIN products pr ON pr.id = i.product_id
+    LEFT JOIN LATERAL (
+        SELECT pi.unit_price
+        FROM purchase_items pi JOIN purchases pp ON pp.id = pi.purchase_id
+        WHERE pi.product_id = i.product_id AND pp.user_id = p.user_id
+          AND pi.unit_price IS NOT NULL
+          AND COALESCE(pi.unit, 'UN') = COALESCE(i.unit, 'UN')
+          AND {_when("pp")} < {_when("p")}
+        ORDER BY {_when("pp")} DESC, pi.position
+        LIMIT 1
+    ) prev ON true
     WHERE p.user_id = %s AND (%s::uuid IS NULL OR p.id = %s)
     ORDER BY i.position"""
 
-# Unreadable date: fall back to the upload time. Unreadable total: 0, so the "Diferença" row shows it.
-_PURCHASES_SQL = """
-    SELECT p.id, p.status, p.payment_method,
-           COALESCE(p.purchased_at, p.created_at AT TIME ZONE 'America/Sao_Paulo') AS purchased_at,
+# Unreadable total: 0, so the "Diferença" row shows it.
+_PURCHASES_SQL = f"""
+    SELECT p.id, p.status, p.payment_method, {_when("p")} AS purchased_at,
            COALESCE(p.total_amount, 0)::float8 AS total_amount,
            s.cnpj, s.name AS store_name, s.address, s.logo
     FROM purchases p LEFT JOIN stores s ON s.id = p.store_id
